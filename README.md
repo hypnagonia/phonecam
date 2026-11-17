@@ -32,7 +32,7 @@ flowchart LR
 | **Auto-frame** | A crop of the full picture calmly follows your face and keeps you centred, with a dead zone and slow easing |
 | **Color** | Saturation, contrast, black level. Graded in sRGB on the GPU |
 | **Video** | Ultra-wide / wide / tele / front lens, zoom, 720p / 1080p / 4K capture (default 4K), 30 / 60 fps, JPEG quality, rotation. The stream is always 1920×1080 |
-| **Effects** | Switches with their measured cost per frame: background blur (Vision person segmentation, run in parallel), face exposure (holds face brightness under Lock, ignores short flashes), noise reduction, video HDR, cinematic look (teal & orange, vignette) |
+| **Background blur** | Vision person segmentation (run in parallel, never slows the stream) with adjustable strength |
 | **Reliability** | The control page and `/obs` reconnect by themselves after the app restarts. Settings persist |
 
 ## Requirements

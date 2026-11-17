@@ -19,12 +19,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     // Effects (switches on the page). Render flags are read on videoQueue under `lock`.
     private var fxBlur = false             // background blur (Vision person segmentation)
-    private var fxNR = false               // noise reduction + light sharpening
-    private var fxLook = false             // teal/orange split tone + vignette
-    private var fxFaceExp = false          // on `queue`: keep face brightness steady under Lock
-    private var fxHDR = false              // on `queue`: camera video HDR
-    private var faceY: Double?             // on `queue`: smoothed face luminance
-    private var faceYTarget: Double?       // on `queue`: brightness to hold, taken when Lock engages
+    private var blurStrength = 3.0         // 0.05…12; blur radius ≈ strength × 8 px at full resolution
     private var visionMs = 0.0
     private let visionQueue = DispatchQueue(label: "cam.vision", qos: .userInitiated)
     private var visionBusy = false         // under `lock`
@@ -143,15 +138,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         session.commitConfiguration()
         applyFps()
         restoreZoom()
-        applyHDR()
-    }
-
-    private func applyHDR() {
-        withDevice { d in
-            guard d.activeFormat.isVideoHDRSupported else { return }
-            d.automaticallyAdjustsVideoHDREnabled = false
-            d.isVideoHDREnabled = fxHDR
-        }
     }
 
     private func restoreZoom() {
@@ -183,7 +169,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     // MARK: settings API (call on `queue`)
 
-    private static let persisted = ["lens", "res", "fps", "rot", "q", "face", "sat", "con", "black", "zoom", "wb", "exp", "frame", "blur", "nr", "look", "fexp", "hdr"]
+    private static let persisted = ["lens", "res", "fps", "rot", "q", "face", "sat", "con", "black", "zoom", "wb", "exp", "frame", "blur", "blurAmt"]
 
     static func saved() -> [String: String] {
         var p = (UserDefaults.standard.dictionary(forKey: "settings") as? [String: String]) ?? [:]
@@ -217,7 +203,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             res = v
             applyFps()
             restoreZoom()
-            applyHDR()
         }
         if let v = p["fps"], let f = Int(v), f == 30 || f == 60 { fps = f; applyFps() }
         if let v = p["rot"], let r = Int(v), [0, 90, 180, 270].contains(r) { lock.withLock { rotation = r } }
@@ -260,7 +245,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
         if let v = p["exp"] {
             expLock = v == "lock"
-            faceYTarget = nil // re-learn the brightness to hold
             withDevice { d in
                 switch v {
                 case "lock":
@@ -318,13 +302,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
 
         if let v = p["blur"] { lock.withLock { fxBlur = v == "1" } }
-        if let v = p["nr"] { lock.withLock { fxNR = v == "1" } }
-        if let v = p["look"] { lock.withLock { fxLook = v == "1" } }
-        if let v = p["fexp"] {
-            fxFaceExp = v == "1"
-            if fxFaceExp && !expLock && p["exp"] == nil { apply(["exp": "lock"]) } // works on top of Lock
-        }
-        if let v = p["hdr"] { fxHDR = v == "1"; applyHDR() }
+        if let v = p["blurAmt"], let x = Double(v) { lock.withLock { blurStrength = min(12, max(0.05, x)) } }
         if let v = p["frame"] {
             lock.withLock { framing = v == "1" }
             if p["zoom"] == nil { restoreZoom() }
@@ -444,11 +422,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "temp": n(Double(tt.temperature)),
             "frame": lock.withLock { framing } ? "1" : "0",
             "blur": lock.withLock { fxBlur } ? "1" : "0",
-            "nr": lock.withLock { fxNR } ? "1" : "0",
-            "look": lock.withLock { fxLook } ? "1" : "0",
-            "fexp": fxFaceExp ? "1" : "0",
-            "hdr": fxHDR ? "1" : "0",
-            "hdrSupported": d.activeFormat.isVideoHDRSupported,
+            "blurAmt": lock.withLock { blurStrength },
             "visionMs": n((visionMs * 10).rounded() / 10),
             "zoom": lock.withLock { framing } ? lock.withLock { softZoom } : n(Double(d.videoZoomFactor)),
             "zoomMin": lock.withLock { framing } ? 1.15 : n(Double(d.minAvailableVideoZoomFactor)),
@@ -511,11 +485,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                   format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB))
         let (R, G, B) = (Double(px[0]), Double(px[1]), Double(px[2]))
         guard G > 0.003 else { return } // too dark to judge
-        let Y = 0.2126 * R + 0.7152 * G + 0.0722 * B
-        queue.async {
-            self.correctWhiteBalance(rg: R / G, bg: B / G)
-            self.correctExposure(faceLuma: Y)
-        }
+        queue.async { self.correctWhiteBalance(rg: R / G, bg: B / G) }
     }
 
     /// queue: nudge the camera's white-balance gains so the face reaches the target ratios.
@@ -580,23 +550,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         return img.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY)
             .concatenating(CGAffineTransform(scaleX: outW / e.width, y: outH / e.height)))
             .cropped(to: CGRect(x: 0, y: 0, width: outW, height: outH))
-    }
-
-    /// queue: under Lock, slowly hold the face at the brightness it had when Lock engaged.
-    /// Heavy smoothing (~3 s) so a white window on the monitor flashing for a second is ignored.
-    private func correctExposure(faceLuma y: Double) {
-        guard fxFaceExp, expLock, y > 0.001 else { return }
-        faceY = faceY.map { $0 * 0.92 + y * 0.08 } ?? y
-        guard let fy = faceY else { return }
-        guard let target = faceYTarget else { faceYTarget = fy; return }
-        let ratio = target / fy
-        guard abs(log(ratio)) > 0.1 else { return } // within ~10%: leave it
-        withDevice { d in
-            guard d.exposureMode == .custom else { return }
-            let f = d.activeFormat
-            let iso = Float(Double(d.iso) * pow(ratio, 0.3))
-            d.setExposureModeCustom(duration: d.exposureDuration, iso: min(f.maxISO, max(f.minISO, iso)), completionHandler: nil)
-        }
     }
 
     // MARK: background blur
@@ -664,14 +617,18 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard wantsFrames() else { return }
         let (rot, q, sat, con, blk) = lock.withLock { (rotation, quality, saturation, contrast, black) }
         var img = CIImage(cvPixelBuffer: pb)
-        let (blurOn, nrOn, lookOn) = lock.withLock { (fxBlur, fxNR, fxLook) }
+        let (blurOn, blurSigma) = lock.withLock { (fxBlur, blurStrength) }
         if blurOn { requestMask(pb, rotation: rot) }
         if blurOn, let mask = currentMask(size: img.extent.size) {
-            // Blur a 1/8-size copy (cheap) and scale it back up; Core Image only computes the cropped part.
+            // Blur a smaller copy (cheap) and scale it back up. Strong blur uses 1/8 size; light blur
+            // uses a larger copy, down to full size, so the downscale itself adds no softness.
             let e = img.extent
-            let small = img.transformed(by: CGAffineTransform(scaleX: 0.125, y: 0.125))
-            let bg = small.clampedToExtent().applyingGaussianBlur(sigma: 3)
-                .transformed(by: CGAffineTransform(scaleX: 8, y: 8)).cropped(to: e)
+            let sigmaFull = blurSigma * 8
+            var s = 1.0
+            while s > 0.125 && sigmaFull * s > 4 { s /= 2 }
+            let bg = img.transformed(by: CGAffineTransform(scaleX: s, y: s))
+                .clampedToExtent().applyingGaussianBlur(sigma: sigmaFull * s)
+                .transformed(by: CGAffineTransform(scaleX: 1 / s, y: 1 / s)).cropped(to: e)
             img = img.applyingFilter("CIBlendWithMask", parameters: [
                 kCIInputBackgroundImageKey: bg, kCIInputMaskImageKey: mask])
         }
@@ -685,10 +642,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         } else if max(img.extent.width, img.extent.height) > 1920 {
             img = Camera.fit(img) // 4K capture → 1080p stream
         }
-        if nrOn {
-            img = img.applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.02, "inputSharpness": 0.6])
-        }
-        let grade = sat != 1 || con != 1 || blk != 0 || lookOn
+        let grade = sat != 1 || con != 1 || blk != 0
         // Grade in gamma-encoded sRGB, like a photo editor, not in CoreImage's linear space.
         if grade { img = img.applyingFilter("CILinearToSRGBToneCurve") }
         if sat != 1 || con != 1 {
@@ -705,18 +659,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 "inputBVector": CIVector(x: 0, y: 0, z: scale, w: 0),
                 "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 0)])
         }
-        if lookOn {
-            // Split tone: f(x) = x + k(-2x + 6x² - 4x³) bends shadows and highlights in opposite
-            // directions. Red/green warm the highlights, blue/green cool the shadows (teal & orange).
-            func poly(_ k: Double) -> CIVector { CIVector(x: 0, y: 1 - 2 * k, z: 6 * k, w: -4 * k) }
-            img = img.applyingFilter("CIColorPolynomial", parameters: [
-                "inputRedCoefficients": poly(0.14), "inputGreenCoefficients": poly(-0.02),
-                "inputBlueCoefficients": poly(-0.16), "inputAlphaCoefficients": CIVector(x: 0, y: 1, z: 0, w: 0)])
-        }
         if grade { img = img.applyingFilter("CISRGBToneCurveToLinear") }
-        if lookOn {
-            img = img.applyingFilter("CIVignette", parameters: [kCIInputIntensityKey: 0.35, kCIInputRadiusKey: 2.2])
-        }
         switch rot {
         case 90: img = img.oriented(.right)
         case 180: img = img.oriented(.down)

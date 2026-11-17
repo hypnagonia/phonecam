@@ -87,11 +87,6 @@ enum Page {
     .row label{width:76px;color:var(--dim);flex:none}
     .row input{flex:1;accent-color:var(--acc)}
     .row output{width:62px;text-align:right;font-variant-numeric:tabular-nums}
-    .fx{display:flex;flex-direction:column;gap:4px}
-    .fx button{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:7px 9px;border:0;border-radius:5px;background:#2a2a2a;color:var(--fg);cursor:pointer;font:inherit;text-align:left}
-    .fx button small{color:var(--dim);font-size:11px;text-align:right}
-    .fx button.on{background:var(--acc);color:#000;font-weight:600}
-    .fx button.on small{color:#3a3000}
     .hint{color:var(--dim);font-size:12px;margin-top:6px;line-height:1.4}
     code{background:#2a2a2a;padding:2px 5px;border-radius:4px;user-select:all}
     @media (max-width:800px){body{flex-direction:column}aside{width:auto;max-height:none}}
@@ -131,15 +126,10 @@ enum Page {
       <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.1" step="0.002"><output id="blackOut"></output></div>
       <div class="hint">Black: right = deeper blacks, left = lifted shadows. Double-click a slider to reset it.</div>
 
-      <h3>Effects</h3>
-      <div class="fx">
-        <button data-k="blur">Background blur<small>~3.5 ms/frame + Vision ~23 ms in parallel</small></button>
-        <button data-k="fexp">Face exposure<small>~0 ms · holds face brightness under Lock</small></button>
-        <button data-k="nr">Noise reduction<small>~2.5 ms/frame</small></button>
-        <button data-k="hdr">Video HDR<small>0 ms · done by the camera</small></button>
-        <button data-k="look">Cinematic look<small>~0.3 ms/frame · teal &amp; orange, vignette</small></button>
-      </div>
-      <div class="hint">Frame budget at 30 fps is 33 ms; the base pipeline uses about 8 ms.</div>
+      <h3>Background blur</h3>
+      <div class="seg" data-k="blur"><button data-v="1">On</button><button data-v="0">Off</button></div>
+      <div class="row"><label>Strength</label><input type="range" id="blurAmt" min="0" max="1" step="0.002"><output id="blurAmtOut"></output></div>
+      <div class="hint">About 3.5 ms per frame; person detection (Vision, ~23 ms) runs in parallel and does not slow the stream.</div>
 
       <h3>Video</h3>
       <div class="seg" data-k="res"><button data-v="720">720p</button><button data-v="1080">1080p</button><button data-v="4k">4K</button></div>
@@ -183,10 +173,6 @@ enum Page {
           if(k==='lens') b.hidden=!(st.lenses||[]).includes(b.dataset.v);
         });
       });
-      document.querySelectorAll('.fx button').forEach(b=>{
-        b.classList.toggle('on',st[b.dataset.k]==='1');
-        if(b.dataset.k==='hdr') b.disabled=!st.hdrSupported;
-      });
       $('zoom').min=st.zoomMin; $('zoom').max=st.zoomMax;
       setSlider('zoom',st.zoom,st.zoom.toFixed(2)+'×');
       setSlider('lensPos',st.lensPos,st.lensPos.toFixed(3));
@@ -199,14 +185,12 @@ enum Page {
       setSlider('sat',st.sat,Math.round(st.sat*100)+'%');
       setSlider('con',st.con,Math.round(st.con*100)+'%');
       setSlider('black',st.black,(st.black>0?'+':'')+Math.round(st.black*1000)/10);
+      setSlider('blurAmt',toLog(st.blurAmt,0.05,12),st.blurAmt<1?st.blurAmt.toFixed(2):st.blurAmt.toFixed(1));
       setSlider('q',st.q,Math.round(st.q*100)+'%');
       $('faceOut').textContent=st.focus==='face'?(st.faceSeen?'(face found)':'(no face)'):'';
       $('fpsOut').textContent=st.realFps; $('cl').textContent=st.clients;
     }
 
-    document.querySelectorAll('.fx button').forEach(b=>b.addEventListener('click',()=>{
-      send({[b.dataset.k]: st[b.dataset.k]==='1' ? 0 : 1});
-    }));
     document.querySelectorAll('.seg').forEach(seg=>seg.addEventListener('click',e=>{
       const b=e.target.closest('button'); if(!b) return;
       const k=seg.dataset.k, val=b.dataset.v;
@@ -219,6 +203,7 @@ enum Page {
       iso:v=>({iso:fromLog(v,st.isoMin,st.isoMax)}),
       shutter:v=>({shutter:fromLog(v,st.shutterMin,st.shutterMax)}),
       temp:v=>({temp:v}), q:v=>({q:v}),
+      blurAmt:v=>({blurAmt:fromLog(v,0.05,12)}),
       sat:v=>({sat:v}), con:v=>({con:v}), black:v=>({black:v}),
     };
     for(const [id,fn] of Object.entries(sliders)){
@@ -226,7 +211,7 @@ enum Page {
       el.addEventListener('pointerdown',()=>busy.add(id));
       el.addEventListener('pointerup',()=>setTimeout(()=>busy.delete(id),600));
       el.addEventListener('input',()=>sendThrottled(fn(+el.value)));
-      const reset={sat:1.55,con:1,black:0,zoom:1,ev:0}[id];
+      const reset={blurAmt:toLog(3,0.05,12),sat:1.55,con:1,black:0,zoom:1,ev:0}[id];
       if(reset!==undefined) el.addEventListener('dblclick',()=>{el.value=reset;send(fn(reset))});
     }
 
