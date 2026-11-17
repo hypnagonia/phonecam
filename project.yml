@@ -1,0 +1,27 @@
+name: PhoneCam
+options:
+  bundleIdPrefix: com.phonecam
+targets:
+  PhoneCam:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [PhoneCam]
+    configFiles:
+      Debug: Local.xcconfig
+      Release: Local.xcconfig
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        PRODUCT_BUNDLE_IDENTIFIER: $(PHONECAM_BUNDLE_ID)
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: PhoneCam
+        INFOPLIST_KEY_NSCameraUsageDescription: "The camera is streamed to your Mac over the local network."
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Your Mac connects to the camera over the local network."
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UIRequiresFullScreen: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"

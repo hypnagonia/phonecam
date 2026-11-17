@@ -1,0 +1,5 @@
+build/
+*.xcodeproj/
+Local.xcconfig
+.DS_Store
+__pycache__/
