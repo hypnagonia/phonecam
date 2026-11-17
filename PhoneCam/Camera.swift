@@ -35,6 +35,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var faceRect: CGRect?
     private var faceRectTime = 0.0
     private var skinMeasureFrame = 0
+    private var skinRG: Double?            // on `queue`: smoothed face colour ratios (linear R/G, B/G)
+    private var skinBG: Double?
+    private var skinSeen = 0.0
     private var input: AVCaptureDeviceInput?
     private var device: AVCaptureDevice? { input?.device }
     private let ci = CIContext(options: [.cacheIntermediates: false])
@@ -461,7 +464,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // MARK: skin-tone white balance
 
     // Target skin colour (sRGB 0…255), a neutral medium-light tone.
-    private static let skinTarget = (r: 222.0, g: 172.0, b: 146.0)
+    private static let skinTarget = (r: 214.0, g: 174.0, b: 152.0) // natural skin as it should look on screen
     private static func lin(_ c: Double) -> Double {
         let x = c / 255
         return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4)
@@ -485,30 +488,59 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                   format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB))
         let (R, G, B) = (Double(px[0]), Double(px[1]), Double(px[2]))
         guard G > 0.003 else { return } // too dark to judge
+        // Bright light can push the red channel of skin to its limit; then the face reads "not red
+        // enough" and the loop would add red. Skip such samples.
+        guard max(R, G, B) < 0.85 else { return }
         queue.async { self.correctWhiteBalance(rg: R / G, bg: B / G) }
     }
 
     /// queue: nudge the camera's white-balance gains so the face reaches the target ratios.
     private func correctWhiteBalance(rg: Double, bg: Double) {
         guard skinWB else { return }
-        let t = Camera.skinTarget
+        // Smooth over ~1 s so a hand, a shadow or a short flash on the face does not swing the colour.
+        let now = CACurrentMediaTime()
+        if now - skinSeen > 1.5 { skinRG = nil; skinBG = nil }
+        skinSeen = now
+        let a = 0.3
+        skinRG = skinRG.map { $0 * (1 - a) + rg * a } ?? rg
+        skinBG = skinBG.map { $0 * (1 - a) + bg * a } ?? bg
+        guard let mrg = skinRG, let mbg = skinBG else { return }
+        // The saturation slider is applied after this, in sRGB. Aim the camera at a tone that saturation
+        // then turns into the target, instead of letting it push the face red.
+        let sat = lock.withLock { saturation }
+        let t0 = Camera.skinTarget
+        let y = 0.2126 * t0.r + 0.7152 * t0.g + 0.0722 * t0.b
+        let k = 1 / max(0.5, sat)
+        let t = (r: y + (t0.r - y) * k, g: y + (t0.g - y) * k, b: y + (t0.b - y) * k)
         let tg = Camera.lin(t.g)
-        let er = (Camera.lin(t.r) / tg) / rg
-        let eb = (Camera.lin(t.b) / tg) / bg
-        guard abs(log(er)) > 0.03 || abs(log(eb)) > 0.03 else { return } // close enough: hold steady
+        let er = (Camera.lin(t.r) / tg) / mrg
+        let eb = (Camera.lin(t.b) / tg) / mbg
+        guard abs(log(er)) > 0.04 || abs(log(eb)) > 0.04 else { return } // close enough: hold steady
         withDevice { d in
             guard d.isLockingWhiteBalanceWithCustomDeviceGainsSupported else { return }
-            var g = d.deviceWhiteBalanceGains
-            let step = 0.35 // move part of the way each time: smooth, no flicker
-            var r = Double(g.redGain) * pow(er, step)
-            var gr = Double(g.greenGain)
-            var b = Double(g.blueGain) * pow(eb, step)
-            let lo = min(r, gr, b) // gains must stay >= 1
-            r /= lo; gr /= lo; b /= lo
-            let m = Double(d.maxWhiteBalanceGain)
-            g.redGain = Float(min(m, r)); g.greenGain = Float(min(m, gr)); g.blueGain = Float(min(m, b))
-            d.setWhiteBalanceModeLocked(with: g, completionHandler: nil)
+            let cur = d.deviceWhiteBalanceGains
+            let step = 0.2 // move part of the way each time: smooth, no flicker
+            var g = AVCaptureDevice.WhiteBalanceGains(
+                redGain: Float(Double(cur.redGain) * pow(er, step)),
+                greenGain: cur.greenGain,
+                blueGain: Float(Double(cur.blueGain) * pow(eb, step)))
+            // Keep it within a sane range of light colours, so an error can never run away into red or blue.
+            var tt = d.temperatureAndTintValues(for: Camera.normalized(g, max: d.maxWhiteBalanceGain))
+            if tt.temperature.isFinite, tt.tint.isFinite {
+                tt.temperature = min(8000, max(2200, tt.temperature))
+                tt.tint = min(20, max(-20, tt.tint))
+                g = d.deviceWhiteBalanceGains(for: tt)
+            }
+            d.setWhiteBalanceModeLocked(with: Camera.normalized(g, max: d.maxWhiteBalanceGain), completionHandler: nil)
         }
+    }
+
+    /// Gains must be within 1…max; scale so the smallest is 1.
+    private static func normalized(_ g: AVCaptureDevice.WhiteBalanceGains, max m: Float) -> AVCaptureDevice.WhiteBalanceGains {
+        let lo = min(g.redGain, g.greenGain, g.blueGain)
+        guard lo > 0 else { return g }
+        return AVCaptureDevice.WhiteBalanceGains(redGain: min(m, g.redGain / lo), greenGain: min(m, g.greenGain / lo),
+                                                 blueGain: min(m, g.blueGain / lo))
     }
 
     // MARK: auto-frame

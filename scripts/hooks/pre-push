@@ -1,0 +1,42 @@
+#!/bin/bash
+# Blocks a push that would publish private data.
+#   1. strings listed in .private-patterns (git-ignored, one per line) in pushed files or commit messages
+#   2. a "Co-Authored-By: Claude" trailer
+#   3. photos/videos, signing files, Local.xcconfig, .env files
+# Enable once per clone:  git config core.hooksPath scripts/hooks
+set -u
+root=$(git rev-parse --show-toplevel)
+patterns="$root/.private-patterns"
+zero=0000000000000000000000000000000000000000
+fail=0
+
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue # deleting a branch
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha" 2>/dev/null; then
+    range="$local_sha"                   # new branch / unknown remote: check all history
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  if [ -s "$patterns" ]; then
+    hits=$(git grep -n -I -i -F -f "$patterns" "$local_sha" -- . 2>/dev/null | cut -d: -f2-)
+    if [ -n "$hits" ]; then echo "pre-push: private data in files:"; echo "$hits" | sed 's/^/  /'; fail=1; fi
+    hits=$(git log --format='%h %B' "$range" | grep -i -F -f "$patterns")
+    if [ -n "$hits" ]; then echo "pre-push: private data in commit messages:"; echo "$hits" | sed 's/^/  /'; fail=1; fi
+  else
+    echo "pre-push: warning: no .private-patterns file, only the generic checks ran"
+  fi
+
+  if git log --format=%B "$range" | grep -qi 'co-authored-by:.*claude'; then
+    echo "pre-push: a commit has a Co-Authored-By: Claude trailer"; fail=1
+  fi
+
+  hits=$(git ls-tree -r --name-only "$local_sha" | grep -iE '\.(jpe?g|png|heic|heif|gif|webp|mov|mp4|m4v)$|(^|/)\.env($|\.)|(^|/)Local\.xcconfig$|\.(mobileprovision|provisionprofile|p12|cer|pem|key)$|(^|/)\.private-patterns$')
+  if [ -n "$hits" ]; then echo "pre-push: files that must not be published:"; echo "$hits" | sed 's/^/  /'; fail=1; fi
+done
+
+if [ "$fail" = 1 ]; then
+  echo "Push blocked. Remove the data (rewrite history if it is already committed)."
+  exit 1
+fi
+exit 0

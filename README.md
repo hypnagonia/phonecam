@@ -11,15 +11,16 @@
 ![Output](https://img.shields.io/badge/stream-1080p%2030fps-6E40C9)
 
 macOS Continuity Camera gives you the picture but almost no control over it: there are no focus, exposure or white balance
-settings. PhoneCam runs the camera on the iPhone itself. It serves a control page and an MJPEG video stream over USB or
-Wi‑Fi, and OBS turns the stream into a virtual camera for Zoom, Meet, Telegram and other apps.
+settings. PhoneCam runs the camera on the iPhone itself and serves a control page and an MJPEG video stream over USB or
+Wi‑Fi. A small Mac app adds a **PhoneCam** camera to macOS for Zoom, Meet, Telegram, FaceTime and other apps, with no
+OBS needed.
 
 ```mermaid
 flowchart LR
-    A["iPhone<br/>PhoneCam app<br/>camera · face detection · Core Image"] -- "USB / Wi‑Fi<br/>MJPEG + JSON" --> B["Mac<br/>relay.py<br/>localhost:4747"]
+    A["iPhone<br/>PhoneCam app<br/>camera · face detection · Core Image"] -- "USB / Wi‑Fi<br/>MJPEG + JSON" --> B["Mac<br/>PhoneCam menu bar app<br/>relay on localhost:4747"]
+    B --> E["PhoneCam camera<br/>(camera extension)<br/>Zoom · Meet · Telegram · FaceTime"]
     B --> C["Browser<br/>control page"]
-    B --> D["OBS<br/>Browser Source"]
-    D --> E["OBS Virtual Camera<br/>Zoom · Meet · Telegram"]
+    B -.-> D["OBS<br/>Browser Source (optional)"]
 ```
 
 ## Features
@@ -55,6 +56,20 @@ open PhoneCam.xcodeproj                    # pick your iPhone, press Run
 3. Keep the app in the foreground, because iOS stops the camera in the background. The screen stays on while the app
    runs; the **Dim screen** button keeps the phone cool.
 
+## Mac app and camera
+
+```sh
+xcodebuild -project PhoneCam.xcodeproj -scheme PhoneCamMac -destination 'platform=macOS' \
+  -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
+ditto build/Build/Products/Debug/PhoneCam.app /Applications/PhoneCam.app   # system extensions install only from /Applications
+open /Applications/PhoneCam.app
+```
+
+The app lives in the menu bar. It relays `localhost:4747` to the phone (USB first) and installs the **PhoneCam**
+camera extension. Approve the extension once in System Settings → General → Login Items & Extensions → Camera
+Extensions, then pick **PhoneCam** as the camera in any app. When the phone app is closed, the camera shows a
+"no signal" card. The menu has "Start at login".
+
 ## Usage
 
 The app shows its Wi‑Fi address, for example `http://192.168.1.20:4747`.
@@ -71,16 +86,17 @@ The app shows its Wi‑Fi address, for example `http://192.168.1.20:4747`.
 
 ### Relay for macOS 15+
 
-If a browser shows "address unreachable", macOS has not given it Local Network permission. You can allow it in
-System Settings → Privacy & Security → Local Network. Or run the relay: it finds the phone (USB first) and serves it on
-localhost, which needs no permission.
+If a browser shows "address unreachable", macOS has not given it Local Network permission. The Mac app's relay solves
+this: open `http://localhost:4747`. Without the Mac app, the Python relay does the same:
 
 ```sh
 python3 mac/relay.py                                   # then open http://localhost:4747
 PHONECAM_HOST=My-iPhone.local python3 mac/relay.py     # if auto-discovery fails
 ```
 
-### OBS
+### OBS (optional)
+
+Not needed with the Mac app. To use OBS anyway:
 
 1. Sources → **+** → **Browser**. Set the URL to `http://localhost:4747/obs`, the size to 1920×1080 and a custom frame
    rate of 30.
@@ -93,5 +109,8 @@ PHONECAM_HOST=My-iPhone.local python3 mac/relay.py     # if auto-discovery fails
 | `PhoneCam/Camera.swift` | AVFoundation capture and device controls, face detection (`AVCaptureMetadataOutput`), Skin white balance (a feedback loop on the white balance gains, using the face's average color), auto-frame crop, Core Image grading and JPEG encoding |
 | `PhoneCam/Server.swift` | Small HTTP server on Network.framework: pages, MJPEG broadcast (slow clients skip frames), JSON API |
 | `PhoneCam/Page.swift` | Control page and the OBS page |
-| `mac/relay.py` | Localhost relay to the phone, standard library only |
+| `mac/PhoneCamMac/` | Menu bar app: localhost relay (Network.framework), camera extension installer, start at login |
+| `mac/CameraExtension/` | CoreMediaIO camera extension: reads the MJPEG stream from localhost, sends 1920×1080 frames, shows a "no signal" card when the phone is gone |
+| `mac/relay.py` | Optional Python relay (standard library only) for use without the Mac app |
+| `scripts/hooks/pre-push` | Blocks pushes that would publish private data; enable with `git config core.hooksPath scripts/hooks` |
 | `project.yml` | XcodeGen spec. Signing settings live in the git-ignored `Local.xcconfig` |
