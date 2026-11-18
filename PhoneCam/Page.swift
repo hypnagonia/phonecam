@@ -177,6 +177,14 @@ enum Page {
       </section>
 
       <section class="card">
+        <h3>Vanity</h3>
+        <div class="row"><label>Eyes</label><input type="range" id="eyes" min="0" max="1" step="0.01"><output id="eyesOut"></output></div>
+        <div class="row"><label>Eye blue</label><input type="range" id="eyeBlue" min="0" max="1" step="0.01"><output id="eyeBlueOut"></output></div>
+        <div class="row"><label>Teeth</label><input type="range" id="teeth" min="0" max="1" step="0.01"><output id="teethOut"></output></div>
+        <div class="hint">Eyes: clearer, cleaner whites, a bit more iris colour. Eye blue: turns the iris toward blue (works best on grey, green and blue eyes). Teeth: less yellow when your mouth is open. 0 switches each off completely.</div>
+      </section>
+
+      <section class="card">
         <h3>Video</h3>
         <div class="seg" data-k="fps"><button data-v="30">30 fps</button><button data-v="60">60 fps</button></div>
         <div class="seg" data-k="rot"><button data-v="auto">Auto</button><button data-v="0">0°</button><button data-v="90">90°</button><button data-v="180">180°</button><button data-v="270">270°</button></div>
@@ -230,6 +238,9 @@ enum Page {
       setSlider('iso',toLog(st.iso,st.isoMin,st.isoMax),Math.round(st.iso));
       setSlider('shutter',toLog(st.shutter,st.shutterMin,st.shutterMax),fmtShutter(st.shutter));
       setSlider('temp',st.temp,Math.round(st.temp));
+      setSlider('eyeBlue',st.eyeBlue,Math.round(st.eyeBlue*100)+'%');
+      setSlider('teeth',st.teeth,Math.round(st.teeth*100)+'%'+(st.teeth>0.01&&!st.mouthOpen?' –':''));
+      setSlider('eyes',st.eyes,Math.round(st.eyes*100)+'%'+(st.eyes>0.01&&!st.eyesSeen?' –':''));
       setSlider('sat',st.sat,Math.round(st.sat*100)+'%');
       const sgn=x=>(x>0?'+':'')+Math.round(x*100);
       setSlider('skinWarm',st.skinWarm,sgn(st.skinWarm));
@@ -257,14 +268,14 @@ enum Page {
       iso:v=>({iso:fromLog(v,st.isoMin,st.isoMax)}),
       shutter:v=>({shutter:fromLog(v,st.shutterMin,st.shutterMax)}),
       temp:v=>({temp:v}), q:v=>({q:v}),
-      sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), con:v=>({con:v}), black:v=>({black:v}),
+      eyes:v=>({eyes:v}), teeth:v=>({teeth:v}), eyeBlue:v=>({eyeBlue:v}), sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), con:v=>({con:v}), black:v=>({black:v}),
     };
     for(const [id,fn] of Object.entries(sliders)){
       const el=$(id);
       el.addEventListener('pointerdown',()=>busy.add(id));
       el.addEventListener('pointerup',()=>setTimeout(()=>busy.delete(id),600));
       el.addEventListener('input',()=>sendThrottled(fn(+el.value)));
-      const reset={red:1,green:1,skinWarm:0,blue:0.6,sat:1.2,con:1,black:0,zoom:1,ev:0}[id];
+      const reset={eyes:0,teeth:0,eyeBlue:0,red:1,green:1,skinWarm:0,blue:0.6,sat:1.2,con:1,black:0,zoom:1,ev:0}[id];
       if(reset!==undefined) el.addEventListener('dblclick',()=>{el.value=reset;send(fn(reset))});
     }
 

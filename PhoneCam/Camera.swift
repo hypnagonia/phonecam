@@ -2,6 +2,7 @@ import AVFoundation
 import CoreImage
 import QuartzCore
 import CoreMotion
+import Vision
 
 /// Owns the capture session. All device configuration runs on `queue`.
 final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureMetadataOutputObjectsDelegate {
@@ -32,6 +33,24 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var device: AVCaptureDevice? { input?.device }
     private let ci = CIContext(options: [.cacheIntermediates: false])
     private var bitDepth = 8               // on `queue`: 10 when a 10-bit SDR format is in use
+
+    // Eyes: a little more clarity, light and colour inside the eyes only (Vision face landmarks).
+    private var eyesAmount = 0.0           // under `lock`: 0…1, 0 = off (no detection runs)
+    private var eyeBlue = 0.0              // under `lock`: 0…1, iris colour turned toward blue
+    private let eyeQueue = DispatchQueue(label: "cam.eyes", qos: .userInitiated)
+    private var eyeBusy = false            // under `lock`
+    private var eyeCorners: [(CGPoint, CGPoint)] = [] // under `lock`: each eye's two corners, sensor-normalized
+    private var eyeTime = 0.0              // under `lock`
+    private var eyeLastRun = 0.0           // under `lock`: detection runs at most 10 times a second
+    private var eyeMs = 0.0                // eye detection time per run (moving average)
+    private var eyeRenderMs = 0.0          // eye filters' share of the frame (moving average)
+    private lazy var landmarks = VNDetectFaceLandmarksRequest()
+    private var eyeCube: (key: [Double], data: Data)? // videoQueue: colour cube for the current settings
+    // Teeth: inside the opened mouth only (Vision's inner lip contour), less yellow and a little lighter.
+    private var teethAmount = 0.0          // under `lock`: 0…1, 0 = off
+    private var mouth: (left: CGPoint, right: CGPoint, center: CGPoint, open: Double)? // under `lock`, sensor-normalized
+    private var mouthTime = 0.0            // under `lock`
+    private var teethCube: (amount: Double, data: Data)? // videoQueue
 
     /// ±0.75 of an 8-bit step, the same for R, G and B (luma only, no colour speckle), fixed in place so the
     /// encoder sees it as unchanging texture. Added just before 8-bit output to break gradients' steps.
@@ -235,6 +254,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if p["fps"] == nil { p["fps"] = "30" }
         if p["zoom"] == nil { p["zoom"] = "1.4" }
         if p["skinWarm"] == nil { p["skinWarm"] = "0" }
+        // Eyes / teeth / eye colour are not saved: every start is with them off.
+        p["eyes"] = "0"; p["teeth"] = "0"; p["eyeBlue"] = "0"
         return p
     }
 
@@ -265,6 +286,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if let v = p["con"], let x = Double(v) { lock.withLock { contrast = min(1.5, max(0.5, x)) } }
         if let v = p["black"], let x = Double(v) { lock.withLock { black = min(0.1, max(-0.1, x)) } }
         if let v = p["skinWarm"], let x = Double(v) { skinWarm = min(1, max(-1, x)) }
+        if let v = p["eyes"], let x = Double(v) { lock.withLock { eyesAmount = min(1, max(0, x)) } }
+        if let v = p["teeth"], let x = Double(v) { lock.withLock { teethAmount = min(1, max(0, x)) } }
+        if let v = p["eyeBlue"], let x = Double(v) { lock.withLock { eyeBlue = min(1, max(0, x)) } }
         if p["red"] != nil || p["green"] != nil || p["blue"] != nil || p["sat"] != nil {
             var h = lock.withLock { hueSat }
             func val(_ k: String, _ old: Double) -> Double { Double(p[k] ?? "").map { min(1.5, max(0, $0)) } ?? old }
@@ -532,6 +556,12 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "q": q, "sat": sat, "con": con, "black": blk, "red": lock.withLock { hueSat.red }, "green": lock.withLock { hueSat.green },
             "blue": lock.withLock { hueSat.blue },
             "skinWarm": skinWarm,
+            "eyes": lock.withLock { eyesAmount },
+            "eyesSeen": lock.withLock { CACurrentMediaTime() - eyeTime < 0.6 },
+            "eyeMs": n((eyeMs * 10).rounded() / 10),
+            "teeth": lock.withLock { teethAmount },
+            "eyeBlue": lock.withLock { eyeBlue },
+            "mouthOpen": lock.withLock { CACurrentMediaTime() - mouthTime < 0.6 && (mouth?.open ?? 0) > 0.12 },
             "faceHue": n(((faceHueDeg ?? 0) * 10).rounded() / 10), "skinShift": n((skinShift * 10).rounded() / 10),
             "focus": followFace ? "face" : focus,
             "faceSeen": CACurrentMediaTime() - faceSeen < 1,
@@ -804,6 +834,207 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         return img.transformed(by: t).cropped(to: e)
     }
 
+    // MARK: eyes
+
+    /// videoQueue: find the eyes on its own queue (Vision face landmarks); frames never wait for it.
+    private func requestEyes(_ pb: CVPixelBuffer, rotation: Int) {
+        let now = CACurrentMediaTime()
+        let busy = lock.withLock { () -> Bool in
+            if eyeBusy || now - eyeLastRun < 0.1 { return true }
+            eyeBusy = true
+            eyeLastRun = now
+            return false
+        }
+        guard !busy else { return }
+        eyeQueue.async {
+            let t0 = CACurrentMediaTime()
+            defer {
+                self.lock.withLock { self.eyeBusy = false }
+                self.eyeMs = self.eyeMs * 0.8 + (CACurrentMediaTime() - t0) * 1000 * 0.2
+            }
+            let orient: CGImagePropertyOrientation
+            switch rotation {
+            case 90: orient = .right
+            case 180: orient = .down
+            case 270: orient = .left
+            default: orient = .up
+            }
+            // A third of 4K is plenty for landmarks; Vision wants the face upright.
+            let small = CIImage(cvPixelBuffer: pb).transformed(by: CGAffineTransform(scaleX: 1.0 / 3, y: 1.0 / 3))
+            try? VNImageRequestHandler(ciImage: small, orientation: orient).perform([self.landmarks])
+            let area = { (f: VNFaceObservation) in f.boundingBox.width * f.boundingBox.height }
+            guard let face = self.landmarks.results?.max(by: { area($0) < area($1) }), let lm = face.landmarks else { return }
+            let bb = face.boundingBox
+            var eyes: [(CGPoint, CGPoint)] = []
+            for region in [lm.leftEye, lm.rightEye].compactMap({ $0 }) {
+                // Landmarks are relative to the face box, in the upright picture with a bottom-left origin.
+                let pts = region.normalizedPoints.map { CGPoint(x: bb.minX + $0.x * bb.width, y: bb.minY + $0.y * bb.height) }
+                guard let l = pts.min(by: { $0.x < $1.x }), let r = pts.max(by: { $0.x < $1.x }) else { continue }
+                eyes.append((Camera.toSensor(u: l.x, v: 1 - l.y, rotation: rotation),
+                             Camera.toSensor(u: r.x, v: 1 - r.y, rotation: rotation)))
+            }
+            if let inner = lm.innerLips {
+                let pts = inner.normalizedPoints.map { CGPoint(x: bb.minX + $0.x * bb.width, y: bb.minY + $0.y * bb.height) }
+                if let l = pts.min(by: { $0.x < $1.x }), let r = pts.max(by: { $0.x < $1.x }),
+                   let top = pts.map(\.y).max(), let bottom = pts.map(\.y).min(), r.x - l.x > 0.01 {
+                    let c = CGPoint(x: (l.x + r.x) / 2, y: (top + bottom) / 2)
+                    let m = (left: Camera.toSensor(u: l.x, v: 1 - l.y, rotation: rotation),
+                             right: Camera.toSensor(u: r.x, v: 1 - r.y, rotation: rotation),
+                             center: Camera.toSensor(u: c.x, v: 1 - c.y, rotation: rotation),
+                             open: Double((top - bottom) / (r.x - l.x)))
+                    self.lock.withLock { self.mouth = m; self.mouthTime = CACurrentMediaTime() }
+                }
+            }
+            guard !eyes.isEmpty else { return }
+            self.lock.withLock { self.eyeCorners = eyes; self.eyeTime = CACurrentMediaTime() }
+        }
+    }
+
+    /// Inside a soft circle around each eye: local contrast (lashes, iris rim), a touch of light and colour.
+    /// `img` is the cropped 1920×1080 picture in sensor orientation; `win` the sensor part it shows.
+    private func enhanceEyes(_ img: CIImage, eyes: [(CGPoint, CGPoint)], window win: CGRect, amount a: Double,
+                             blue: Double) -> CIImage {
+        let e = img.extent
+        func px(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: e.minX + (p.x - win.minX) / win.width * e.width,
+                    y: e.minY + (1 - (p.y - win.minY) / win.height) * e.height)
+        }
+        var mask: CIImage?
+        var area = CGRect.null
+        var eyeWidth: CGFloat = 0
+        for (c1, c2) in eyes {
+            let a1 = px(c1), a2 = px(c2)
+            let w = hypot(a1.x - a2.x, a1.y - a2.y)
+            guard w > 6 else { continue }
+            let c = CGPoint(x: (a1.x + a2.x) / 2, y: (a1.y + a2.y) / 2)
+            let disc = CIFilter(name: "CIRadialGradient", parameters: [
+                "inputCenter": CIVector(x: c.x, y: c.y), "inputRadius0": w * 0.35, "inputRadius1": w * 0.75,
+                "inputColor0": CIColor(red: 1, green: 1, blue: 1), "inputColor1": CIColor(red: 0, green: 0, blue: 0),
+            ])!.outputImage!
+            mask = mask.map { disc.applyingFilter("CIMaximumCompositing", parameters: [kCIInputBackgroundImageKey: $0]) } ?? disc
+            area = area.union(CGRect(x: c.x - w, y: c.y - w, width: 2 * w, height: 2 * w))
+            eyeWidth = max(eyeWidth, w)
+        }
+        guard let mask else { return img }
+        // Work only on the eyes' area; outside it the blend keeps the picture as it is.
+        let region = img.cropped(to: area.intersection(e))
+        let key = [(a * 20).rounded() / 20, (blue * 20).rounded() / 20] // rebuild only in 5% steps
+        if eyeCube?.key != key { eyeCube = (key, Camera.eyeCube(amount: key[0], blue: key[1])) }
+        let enhanced = region
+            .applyingFilter("CIUnsharpMask", parameters: [kCIInputRadiusKey: max(1.5, eyeWidth / 25), kCIInputIntensityKey: 0.8 * a])
+            .applyingFilter("CIColorControls", parameters: [
+                kCIInputSaturationKey: 1, kCIInputContrastKey: 1 + 0.12 * a, kCIInputBrightnessKey: 0.025 * a])
+            .applyingFilter("CIColorCubeWithColorSpace", parameters: [
+                "inputCubeDimension": 16, "inputCubeData": eyeCube!.data,
+                "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB)!])
+        return enhanced.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: mask.cropped(to: e)]).cropped(to: e)
+    }
+
+    /// Inside a soft ellipse over the opened mouth: yellowish light tones (teeth) lose colour and brighten a
+    /// little; reds and pinks (lips, gums, tongue) are left alone by the colour cube.
+    private func whitenTeeth(_ img: CIImage, mouth m: (left: CGPoint, right: CGPoint, center: CGPoint, open: Double),
+                             window win: CGRect, amount a: Double) -> CIImage {
+        let e = img.extent
+        func px(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: e.minX + (p.x - win.minX) / win.width * e.width,
+                    y: e.minY + (1 - (p.y - win.minY) / win.height) * e.height)
+        }
+        let l = px(m.left), r = px(m.right), c = px(m.center)
+        let w = hypot(r.x - l.x, r.y - l.y)
+        guard w > 10 else { return img }
+        let h = max(4, w * CGFloat(m.open))
+        let angle = atan2(r.y - l.y, r.x - l.x)
+        // A unit soft disc stretched to the mouth opening and turned along the line between the corners.
+        let mask = CIFilter(name: "CIRadialGradient", parameters: [
+            "inputCenter": CIVector(x: 0, y: 0), "inputRadius0": 0.6, "inputRadius1": 1.0,
+            "inputColor0": CIColor(red: 1, green: 1, blue: 1), "inputColor1": CIColor(red: 0, green: 0, blue: 0),
+        ])!.outputImage!.transformed(by: CGAffineTransform(translationX: c.x, y: c.y)
+            .rotated(by: angle).scaledBy(x: w / 2, y: h / 2 * 1.1))
+        let q = (a * 20).rounded() / 20
+        if teethCube?.amount != q { teethCube = (q, Camera.teethCube(amount: q)) }
+        let area = CGRect(x: c.x - w, y: c.y - w, width: 2 * w, height: 2 * w).intersection(e)
+        let enhanced = img.cropped(to: area).applyingFilter("CIColorCubeWithColorSpace", parameters: [
+            "inputCubeDimension": 16, "inputCubeData": teethCube!.data,
+            "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB)!])
+        return enhanced.applyingFilter("CIBlendWithMask", parameters: [
+            kCIInputBackgroundImageKey: img, kCIInputMaskImageKey: mask.cropped(to: e)]).cropped(to: e)
+    }
+
+    /// 16³ cube for teeth: light yellow-orange tones (hue ~25–65°) lose most of their colour and get a little
+    /// lighter; reds and pinks (lips, gums, tongue) and dark tones stay as they are.
+    static func teethCube(amount a: Double) -> Data {
+        let n = 16
+        var out = [Float](repeating: 0, count: n * n * n * 4)
+        var i = 0
+        for bi in 0..<n {
+            for gi in 0..<n {
+                for ri in 0..<n {
+                    let r = Double(ri) / Double(n - 1), g = Double(gi) / Double(n - 1), b = Double(bi) / Double(n - 1)
+                    var (rr, gg, bb) = (r, g, b)
+                    let v = max(r, g, b)
+                    if let h = hue(r, g, b, minChroma: 0.02), h >= 15, h <= 75 {
+                        let band = h < 25 ? (h - 15) / 10 : h > 65 ? (75 - h) / 10 : 1 // soft edges
+                        let light = min(1, max(0, (v - 0.35) / 0.3))
+                        let k = a * band * light
+                        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                        let f = 1 - 0.7 * k              // less yellow
+                        let lift = 1 + 0.08 * k          // a little brighter
+                        rr = (y + (r - y) * f) * lift; gg = (y + (g - y) * f) * lift; bb = (y + (b - y) * f) * lift
+                    }
+                    out[i] = Float(min(1, max(0, rr))); out[i + 1] = Float(min(1, max(0, gg)))
+                    out[i + 2] = Float(min(1, max(0, bb))); out[i + 3] = 1
+                    i += 4
+                }
+            }
+        }
+        return out.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
+    /// 16³ cube for the eyes: reds and pinks (veins in the whites, the rims) lose colour, more so when light,
+    /// so the whites look clean; other iris colours (blue, green, grey) gain a little saturation.
+    static func eyeCube(amount a: Double, blue bl: Double = 0) -> Data {
+        let n = 16
+        var out = [Float](repeating: 0, count: n * n * n * 4)
+        var i = 0
+        for bi in 0..<n {
+            for gi in 0..<n {
+                for ri in 0..<n {
+                    let r = Double(ri) / Double(n - 1), g = Double(gi) / Double(n - 1), b = Double(bi) / Double(n - 1)
+                    var f = 1.0
+                    if let h = hue(r, g, b, minChroma: 0.02) {
+                        let dr = min(abs(h), abs(360 - h)) // distance from pure red
+                        let redness = dr >= 40 ? 0 : 0.5 + 0.5 * cos(.pi * dr / 40)
+                        let light = min(1, max(0, (max(r, g, b) - 0.35) / 0.4))
+                        f = 1 + 0.35 * a * (1 - redness) - 0.7 * a * redness * (0.4 + 0.6 * light)
+                    }
+                    let y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                    var (rr, gg, bb) = (y + (r - y) * f, y + (g - y) * f, y + (b - y) * f)
+                    if bl > 0.001 {
+                        // Iris toward blue: mid tones only (whites of the eye are light, pupils and lashes dark),
+                        // never reds/oranges (lids, skin, veins).
+                        let v = max(r, g, b)
+                        let mid = min(1, max(0, (v - 0.12) / 0.1)) * min(1, max(0, (0.7 - v) / 0.15))
+                        let hh = hue(r, g, b, minChroma: 0.03)
+                        let warm = hh.map { $0 < 45 || $0 > 320 } ?? false
+                        let k = bl * mid * (warm ? 0 : 1)
+                        if k > 0 {
+                            let target = (r: y * 0.82, g: y * 0.98, b: y * 1.25) // a calm blue at the same brightness
+                            let tint = 0.55 * k
+                            rr += (target.r - rr) * tint; gg += (target.g - gg) * tint; bb += (target.b - bb) * tint
+                        }
+                    }
+                    out[i] = Float(min(1, max(0, rr)))
+                    out[i + 1] = Float(min(1, max(0, gg)))
+                    out[i + 2] = Float(min(1, max(0, bb)))
+                    out[i + 3] = 1
+                    i += 4
+                }
+            }
+        }
+        return out.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
     /// Scale so the long side is 1920 and both sides are whole even pixels (1920×1080 for 16:9).
     private static func fit(_ img: CIImage) -> CIImage {
         let e = img.extent
@@ -831,7 +1062,10 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard wantJ || wantH || wantP else { return }
         let (rot, q, sat, con, blk) = lock.withLock { (rotation, quality, saturation, contrast, black) }
         var img = CIImage(cvPixelBuffer: pb)
-        let (on, zoom) = lock.withLock { (framing, softZoom) }
+        let (on, zoom, eyesAmt, teethAmt, blueAmt) = lock.withLock { (framing, softZoom, eyesAmount, teethAmount, eyeBlue) }
+        let eyesOn = eyesAmt > 0.01 || blueAmt > 0.01
+        if eyesOn || teethAmt > 0.01 { requestEyes(pb, rotation: rot) } // one face pass for all
+        var cropWin = CGRect(x: 0, y: 0, width: 1, height: 1) // the part of the sensor the picture shows
         let W = img.extent.width, H = img.extent.height
         let upright = rot == 90 || rot == 270
         if on || upright || abs(Double(W / H) - 16.0 / 9) > 0.01 {
@@ -844,10 +1078,23 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 win = CGRect(x: 0.5 - ws.w / 2, y: 0.5 - ws.h / 2, width: ws.w, height: ws.h)
             }
             lock.withLock { window = win }
+            cropWin = win
             let r = CGRect(x: win.minX * W, y: (1 - win.maxY) * H, width: win.width * W, height: win.height * H).integral
             img = Camera.fit(img.cropped(to: r)) // output 1920×1080 whatever the capture size
         } else if max(img.extent.width, img.extent.height) > 1920 {
             img = Camera.fit(img) // 4K capture → 1080p stream
+        }
+        if eyesOn {
+            let (eyes, age) = lock.withLock { (eyeCorners, CACurrentMediaTime() - eyeTime) }
+            if !eyes.isEmpty, age < 0.6 {
+                let fade = age < 0.3 ? 1 : (0.6 - age) / 0.3 // eyes lost (blink, turned away): fade out
+                img = enhanceEyes(img, eyes: eyes, window: cropWin, amount: eyesAmt * fade, blue: blueAmt * fade)
+            }
+        }
+        if teethAmt > 0.01, let (m, age) = lock.withLock({ mouth.map { ($0, CACurrentMediaTime() - mouthTime) } }),
+           age < 0.6, m.open > 0.12 { // only when the mouth is open enough to show teeth
+            let fade = age < 0.3 ? 1 : (0.6 - age) / 0.3
+            img = whitenTeeth(img, mouth: m, window: cropWin, amount: teethAmt * fade)
         }
         let cube = lock.withLock { hueCube }
         let grade = sat != 1 || con != 1 || blk != 0 || cube != nil

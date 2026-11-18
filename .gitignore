@@ -4,3 +4,4 @@ Local.xcconfig
 .DS_Store
 __pycache__/
 .private-patterns
+CLAUDE.md
