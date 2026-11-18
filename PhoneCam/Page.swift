@@ -101,6 +101,8 @@ enum Page {
     aside{display:flex;flex-direction:column;gap:10px;overflow-y:auto;max-height:calc(100vh - 70px);padding-right:2px;scrollbar-width:thin;scrollbar-color:var(--knob) transparent}
     .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
     h3{margin:0 0 10px;font-size:15px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:8px}
+    h3 .mini{margin-left:auto;padding:3px 10px;border-radius:99px;border:1px solid var(--line);background:var(--track);color:var(--dim);font:inherit;font-size:12px;font-weight:400;cursor:pointer}
+    h3 .mini:hover{color:var(--fg)}
     h3 span{margin-left:auto;font-size:13px;font-weight:400;color:var(--faint)}
     .seg{display:flex;gap:2px;padding:3px;border-radius:9px;background:var(--track)}
     .seg+.seg,.seg+.row,.row+.seg{margin-top:8px}
@@ -171,22 +173,27 @@ enum Page {
       </section>
 
       <section class="card">
-        <h3>Color</h3>
+        <h3>Color <button class="mini" id="colorReset" title="Colour sliders back to the defaults">Reset</button></h3>
+        <div class="row"><label>Warmth</label><input type="range" id="warm" min="-1" max="1" step="0.01"><output id="warmOut"></output></div>
+        <div class="row"><label>Tint</label><input type="range" id="tint" min="-1" max="1" step="0.01"><output id="tintOut"></output></div>
         <div class="row"><label>Saturation</label><input type="range" id="sat" min="0" max="2" step="0.01"><output id="satOut"></output></div>
         <div class="row"><label>Contrast</label><input type="range" id="con" min="0.5" max="1.5" step="0.01"><output id="conOut"></output></div>
         <div class="row"><label>Red</label><input type="range" id="red" min="0" max="1.5" step="0.01"><output id="redOut"></output></div>
         <div class="row"><label>Green</label><input type="range" id="green" min="0" max="1.5" step="0.01"><output id="greenOut"></output></div>
         <div class="row"><label>Blue</label><input type="range" id="blue" min="0" max="1.5" step="0.01"><output id="blueOut"></output></div>
         <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.1" step="0.002"><output id="blackOut"></output></div>
-        <div class="hint">Red, Green, Blue change saturation of those hues only (Red includes skin and orange).</div>
+        <div class="hint">Warmth: bluer ↔ more amber. Tint: greener ↔ more magenta. Red, Green, Blue change saturation of those hues only (Red includes skin and orange).</div>
       </section>
+
 
 
       <section class="card">
         <h3>Video</h3>
+        <div class="seg" data-k="cap"><button data-v="4k">4K capture</button><button data-v="1080">1080p capture</button></div>
         <div class="seg" data-k="fps"><button data-v="30">30 fps</button><button data-v="60">60 fps</button></div>
         <div class="seg" data-k="rot"><button data-v="auto">Auto</button><button data-v="0">0°</button><button data-v="90">90°</button><button data-v="180">180°</button><button data-v="270">270°</button></div>
         <div class="row"><label>Quality</label><input type="range" id="q" min="0.4" max="0.95" step="0.01"><output id="qOut"></output></div>
+        <div class="hint">4K: sharpest when auto-frame or zoom crop the picture. 1080p: about a quarter of the pixels, so the iPhone runs cooler and uses less battery; crops look a little softer.</div>
       </section>
 
       <section class="card">
@@ -249,6 +256,7 @@ enum Page {
       setSlider('sat',st.sat,Math.round(st.sat*100)+'%');
       const sgn=x=>(x>0?'+':'')+Math.round(x*100);
       setSlider('skinWarm',st.skinWarm,sgn(st.skinWarm));
+      setSlider('warm',st.warm,sgn(st.warm)); setSlider('tint',st.tint,sgn(st.tint));
       $('skinInfo').textContent=st.wb==='skin'?('face '+st.faceHue+'°, shift '+(st.skinShift>0?'+':'')+st.skinShift+'°'):'off';
       setSlider('red',st.red,Math.round(st.red*100)+'%');
       setSlider('green',st.green,Math.round(st.green*100)+'%');
@@ -276,18 +284,20 @@ enum Page {
       iso:v=>({iso:fromLog(v,st.isoMin,st.isoMax)}),
       shutter:v=>({shutter:fromLog(v,st.shutterMin,st.shutterMax)}),
       temp:v=>({temp:v}), q:v=>({q:v}),
-      sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), con:v=>({con:v}), black:v=>({black:v}),
+      sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), warm:v=>({warm:v}), tint:v=>({tint:v}), con:v=>({con:v}), black:v=>({black:v}),
     };
+    const defaults={red:1,green:1,skinWarm:0,warm:0,tint:0,blue:1,sat:1,con:1,black:0,zoom:1.15,ev:0};
     for(const [id,fn] of Object.entries(sliders)){
       const el=$(id);
       el.addEventListener('pointerdown',()=>busy.add(id));
       el.addEventListener('pointerup',()=>setTimeout(()=>busy.delete(id),600));
       el.addEventListener('input',()=>sendThrottled(fn(+el.value)));
-      const reset={red:1,green:1,skinWarm:0,blue:0.6,sat:1.2,con:1,black:0,zoom:1,ev:0}[id];
+      const reset=defaults[id];
       if(reset!==undefined) el.addEventListener('dblclick',()=>{el.value=reset;send(fn(reset))});
     }
 
     const v=$('v'), mark=$('mark');
+    $('colorReset').onclick=()=>send({warm:0,tint:0,sat:1,con:1,red:1,green:1,blue:1,black:0});
     $('reset').onclick=()=>{ if(confirm('Reset all settings to the defaults?')) send({reset:1}) };
 
     // Preview is off by default: apps use the PhoneCam camera, the page only needs the settings.

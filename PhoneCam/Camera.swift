@@ -23,6 +23,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var trackPoint: CGPoint?       // under `lock`: where auto-frame aims (sensor-normalized)
     private var trackTime = 0.0
     private var skinMeasureFrame = 0
+    private var userEV: Float = 0          // under `lock`: the EV slider
+    private var hlOffset: Float = 0        // videoQueue: highlight guard, added to the EV in auto exposure
+    private var faceLuma = (value: 0.0, time: 0.0) // videoQueue: brightness of the face centre (sRGB 0…1)
     private var skinSeen = 0.0
     private var faceHueDeg: Double?        // on `queue`: smoothed hue of the face (sRGB HSV degrees)
     private var skinShift = 0.0            // on `queue`: hue rotation applied to skin tones, degrees
@@ -49,6 +52,10 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // Settings, touched only on `queue`.
     private var lens = "wide"
     private var fps = 30
+    private var cap = "4k"                 // capture size: "4k" (sharpest crops) or "1080" (cooler, less battery)
+    private var capPreset: AVCaptureSession.Preset {
+        cap == "1080" || !session.canSetSessionPreset(.hd4K3840x2160) ? .hd1920x1080 : .hd4K3840x2160
+    }
 
     // Render settings, read on videoQueue, written on queue.
     private let lock = NSLock()
@@ -57,6 +64,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var saturation = 1.2   // 0…2
     private var contrast = 1.0     // 0.5…1.5
     private var black = 0.0        // -0.1 (lift) … +0.1 (crush)
+    private var warm = 0.0, tint = 0.0 // under `lock`: manual colour balance, -1…1 (warm: blue↔amber, tint: green↔magenta)
     private var hueSat = (red: 1.0, green: 1.0, blue: 0.6) // extra saturation per hue band (0…1.5)
     private var hueCube: Data?     // 32³ colour cube for hueSat, rebuilt when it changes
     private var framing = true     // auto-frame: crop follows the face
@@ -66,7 +74,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var gravityDeg = 0.0   // under `lock`: angle of gravity in the phone's x-y plane (diagnostics)
     private var rotCandidate = -1, rotStable = 0 // motion queue: a new orientation must hold ~1 s
     private let motion = CMMotionManager()
-    private var softZoom = 1.4     // crop factor while framing
+    private var softZoom = 1.15    // crop factor while framing
     private var window = CGRect(x: 0, y: 0, width: 1, height: 1) // last crop, sensor-normalized
 
     // Auto-frame smoothing, videoQueue only.
@@ -89,6 +97,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     private var lastViewer = CACurrentMediaTime() // on `queue`
     private var idleTimer: DispatchSourceTimer?
     private(set) var asleep = false               // on `queue`
+    private var sleepSoon = false                 // on `queue`: the Mac stopped the camera: sleep as soon as nobody watches
     private var encMs = 0.0   // render + JPEG time per frame (moving average)
     private var pipeMs = 0.0  // sensor capture → JPEG ready (moving average)
 
@@ -146,7 +155,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             session.addInput(old)
         }
         // Always 4K: auto-frame and the upright crop cut 1080p out of it, so they stay sharp.
-        session.sessionPreset = session.canSetSessionPreset(.hd4K3840x2160) ? .hd4K3840x2160 : .hd1920x1080
+        session.sessionPreset = capPreset
         use10Bit(d)
         if let c = output.connection(with: .video) {
             if c.isVideoStabilizationSupported { c.preferredVideoStabilizationMode = .off } // less latency
@@ -169,7 +178,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             // The slowest format that still reaches the frame rate (fast modes may bin pixels).
             guard let fmt = d.formats.filter({ f in
                 let dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
-                return dim.width == 3840 && dim.height == 2160
+                let (w, h): (Int32, Int32) = cap == "1080" ? (1920, 1080) : (3840, 2160)
+                return dim.width == w && dim.height == h
                     && CMFormatDescriptionGetMediaSubType(f.formatDescription) == tenBit
                     && f.supportedColorSpaces.contains(.sRGB) && maxFps(f) >= Double(fps) - 0.1
             }).min(by: { maxFps($0) < maxFps($1) }) else { continue }
@@ -189,7 +199,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // No 10-bit SDR mode: back to the 8-bit 4K preset.
         bitDepth = 8
         output.videoSettings = nil
-        session.sessionPreset = session.canSetSessionPreset(.hd4K3840x2160) ? .hd4K3840x2160 : .hd1920x1080
+        session.sessionPreset = capPreset
     }
 
     private func restoreZoom() {
@@ -221,39 +231,48 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     // MARK: settings API (call on `queue`)
 
-    private static let persisted = ["lens", "fps", "rot", "q", "face", "sat", "con", "black", "red", "green", "blue", "skinWarm", "zoom", "wb", "exp", "frame", "level"]
+    private static let persisted = ["lens", "fps", "cap", "rot", "q", "sat", "con", "black", "red", "green", "blue", "skinWarm", "warm", "tint", "zoom", "wb", "exp", "frame", "level"]
 
     static func saved() -> [String: String] {
         var p = (UserDefaults.standard.dictionary(forKey: "settings") as? [String: String]) ?? [:]
         if p["rot"] == nil { p["rot"] = "auto" } // picked from gravity (a Mac mount gives 180)
-        if p["face"] == nil { p["face"] = "1" }
-        if p["wb"] == nil { p["wb"] = "skin" }
+        p["face"] = "1" // always start following the face, whatever was chosen last time
+        if p["wb"] == nil { p["wb"] = "auto" }
         if p["frame"] == nil { p["frame"] = "1" }
         if p["level"] == nil { p["level"] = "1" }
         if p["q"] == nil { p["q"] = "0.95" } // maximum JPEG quality (USB carries it easily)
-        if p["exp"] == nil || p["exp"] == "manual" { p["exp"] = "lock" }
-        // Default grade: richer colour, contrast and blacks untouched.
-        if p["sat"] == nil { p["sat"] = "1.2" }
+        if p["exp"] == nil || p["exp"] == "manual" { p["exp"] = "auto" }
+        // Default grade: neutral, the picture as the camera sees it.
+        if p["sat"] == nil { p["sat"] = "1" }
         if p["con"] == nil { p["con"] = "1" }
         if p["black"] == nil { p["black"] = "0" }
         if p["red"] == nil { p["red"] = "1" }
         if p["green"] == nil { p["green"] = "1" }
-        if p["blue"] == nil { p["blue"] = "0.6" } // tame the blue room behind a warm-lit face
+        if p["blue"] == nil { p["blue"] = "1" }
         if p["lens"] == nil { p["lens"] = "wide" }
         if p["fps"] == nil { p["fps"] = "30" }
-        if p["zoom"] == nil { p["zoom"] = "1.4" }
+        if p["cap"] == nil { p["cap"] = "4k" }
+        if p["zoom"] == nil { p["zoom"] = "1.15" }
         if p["skinWarm"] == nil { p["skinWarm"] = "0" }
+        if p["warm"] == nil { p["warm"] = "0" }
+        if p["tint"] == nil { p["tint"] = "0" }
         return p
     }
 
     func apply(_ p: [String: String]) {
         if p["reset"] == "1" { return resetToDefaults() }
+        if p["sleep"] == "1" { queue.async { self.sleepSoon = true }; return }
         let keep = p.filter { Camera.persisted.contains($0.key) }
         if !keep.isEmpty {
             UserDefaults.standard.set(Camera.saved().merging(keep) { $1 }, forKey: "settings")
         }
         if let v = p["lens"], v != lens {
             switchLens(v) // a new lens starts in auto exposure
+            if p["exp"] == nil { lockExposureLater(Camera.saved()["exp"]) }
+        }
+        if let v = p["cap"], v == "4k" || v == "1080", v != cap {
+            cap = v
+            switchLens(lens) // new capture size; the camera restarts in auto exposure
             if p["exp"] == nil { lockExposureLater(Camera.saved()["exp"]) }
         }
         if let v = p["fps"], let f = Int(v), f == 30 || f == 60, f != fps {
@@ -290,12 +309,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 if d.isExposureModeSupported(.continuousAutoExposure) { d.exposureMode = .continuousAutoExposure }
             } }
         }
-        // Manual focus / point focus turns face following off.
-        if p["tap"] != nil || p["lensPos"] != nil || p["focus"] == "lock" {
-            followFace = false
-            var saved = Camera.saved(); saved["face"] = "0"
-            UserDefaults.standard.set(saved, forKey: "settings")
-        }
+        // Manual focus / point focus turns face following off until the app restarts (Face is the default).
+        if p["tap"] != nil || p["lensPos"] != nil || p["focus"] == "lock" { followFace = false }
         if let v = p["tap"] {
             let parts = v.split(separator: ",").compactMap { Double($0) }
             if parts.count == 2 { tap(u: parts[0], v: parts[1]) }
@@ -337,7 +352,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             }
         }
         if let v = p["ev"], let f = Float(v) {
-            withDevice { d in d.setExposureTargetBias(min(d.maxExposureTargetBias, max(d.minExposureTargetBias, f)), completionHandler: nil) }
+            lock.withLock { userEV = f }
+            applyBias()
         }
         if p["iso"] != nil || p["shutter"] != nil {
             expLock = false
@@ -457,7 +473,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                     self.restoreZoom()           // startRunning resets the zoom factor
                     self.encoder.requestKeyframe()
                 }
-            } else if !self.asleep, now - self.lastViewer > Camera.sleepAfter {
+            } else if !self.asleep, self.sleepSoon || now - self.lastViewer > Camera.sleepAfter {
+                self.sleepSoon = false
                 self.asleep = true
                 self.session.stopRunning()
                 self.measuredFps = 0
@@ -561,6 +578,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "realFps": n((measuredFps * 10).rounded() / 10),
             "asleep": asleep,
             "bitDepth": bitDepth,
+            "cap": cap,
             "thermal": ["ok", "warm", "hot", "critical"][min(3, ProcessInfo.processInfo.thermalState.rawValue)],
             "encMs": n((encMs * 10).rounded() / 10), "pipeMs": n((pipeMs * 10).rounded() / 10),
             "rot": lock.withLock { autoRot } ? "auto" : "\(rot)",
@@ -568,9 +586,11 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "gravity": n((lock.withLock { gravityDeg } * 10).rounded() / 10),
             "q": q, "sat": sat, "con": con, "black": blk, "red": lock.withLock { hueSat.red }, "green": lock.withLock { hueSat.green },
             "blue": lock.withLock { hueSat.blue },
-            "skinWarm": skinWarm,
+            "skinWarm": skinWarm, "warm": lock.withLock { warm }, "tint": lock.withLock { tint },
             "faceHue": n(((faceHueDeg ?? 0) * 10).rounded() / 10), "skinShift": n((skinShift * 10).rounded() / 10),
             "focus": followFace ? "face" : focus,
+            "win": lock.withLock { [window.minX, window.minY, window.width, window.height].map { n((Double($0) * 1000).rounded() / 1000) } },
+            "track": lock.withLock { trackPoint.map { [n((Double($0.x) * 1000).rounded() / 1000), n((Double($0.y) * 1000).rounded() / 1000), n(((CACurrentMediaTime() - trackTime) * 10).rounded() / 10)] } ?? [] },
             "faceSeen": CACurrentMediaTime() - faceSeen < 1,
             "focusSupported": d.isLockingFocusWithCustomLensPositionSupported,
             "lensPos": n(Double(d.lensPosition)),
@@ -578,7 +598,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "iso": n(Double(d.iso)), "isoMin": n(Double(f.minISO)), "isoMax": n(Double(f.maxISO)),
             "shutter": n(d.exposureDuration.seconds),
             "shutterMin": n(f.minExposureDuration.seconds), "shutterMax": n(maxShutter(d)),
-            "ev": n(Double(d.exposureTargetBias)),
+            "ev": n(Double(lock.withLock { userEV })), "hlGuard": n((Double(hlOffset) * 10).rounded() / 10),
             "evMin": n(Double(d.minExposureTargetBias)), "evMax": n(Double(d.maxExposureTargetBias)),
             "wb": skinWB ? "skin" : (d.whiteBalanceMode == .locked ? "lock" : "auto"),
             "temp": n(Double(tt.temperature)),
@@ -636,6 +656,45 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     // MARK: skin-tone white balance
 
+    // MARK: highlight guard
+
+    /// videoQueue, 3 times a second: in auto exposure, metering on the face lets a white wall or a window
+    /// behind blow out. When more than 2% of the picture is clipped, pull the exposure down while the face
+    /// stays bright enough (up to -1.5 EV below the slider; -0.7 with no face); back up once it's safe.
+    private func guardHighlights(_ pb: CVPixelBuffer) {
+        guard skinMeasureFrame % 10 == 5 else { return }
+        let auto = device?.exposureMode == .continuousAutoExposure
+        guard auto else {
+            if hlOffset != 0 { hlOffset = 0; applyBias() }
+            return
+        }
+        let img = CIImage(cvPixelBuffer: pb)
+        let sx = 96 / img.extent.width, sy = 54 / img.extent.height
+        let small = img.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
+        var px = [UInt8](repeating: 0, count: 96 * 54 * 4)
+        ci.render(small, toBitmap: &px, rowBytes: 96 * 4, bounds: CGRect(x: 0, y: 0, width: 96, height: 54),
+                  format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        var clipped = 0
+        for i in stride(from: 0, to: px.count, by: 4) where max(px[i], px[i + 1], px[i + 2]) >= 245 { clipped += 1 }
+        let frac = Double(clipped) / Double(96 * 54)
+        // The face wins: never darken it below a natural level for the sake of a window or a lamp.
+        let face = CACurrentMediaTime() - faceLuma.time < 1 ? faceLuma.value : nil
+        let floor: Float = face == nil ? -0.7 : -1.5
+        var o = hlOffset
+        if let face, face < 0.30 { o = min(0, o + 0.1) }
+        else if frac > 0.02, face.map({ $0 > 0.35 }) ?? true { o = max(floor, o - 0.1) }
+        else if frac < 0.005 { o = min(0, o + 0.05) }
+        guard o != hlOffset else { return }
+        hlOffset = o
+        applyBias()
+    }
+
+    /// The exposure bias: the EV slider plus the highlight guard.
+    private func applyBias() {
+        let b = lock.withLock { userEV } + hlOffset
+        withDevice { d in d.setExposureTargetBias(min(d.maxExposureTargetBias, max(d.minExposureTargetBias, b)), completionHandler: nil) }
+    }
+
     /// videoQueue: average colour of the centre of the face, a few times a second.
     private func measureSkin(_ pb: CVPixelBuffer) {
         skinMeasureFrame += 1
@@ -653,6 +712,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         ci.render(avg, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
                   format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB))
         let (R, G, B) = (Double(px[0]), Double(px[1]), Double(px[2]))
+        faceLuma = (pow(max(0, 0.2126 * R + 0.7152 * G + 0.0722 * B), 1 / 2.2), CACurrentMediaTime())
         guard G > 0.003 else { return } // too dark to judge
         // Bright light can push the red channel of skin to its limit; then the face reads "not red
         // enough" and the loop would add red. Skip such samples.
@@ -819,7 +879,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         frameCenter.y = min(1 - hh, max(hh, frameCenter.y))
         let size = max(ws.w, ws.h)
         let dist = hypot(goal.x - frameCenter.x, goal.y - frameCenter.y)
-        if dist > size * 0.10 { framingMoving = true }   // ignore small moves
+        if dist > size * 0.06 { framingMoving = true }   // ignore small moves
         if dist < size * 0.02 { framingMoving = false }
         if framingMoving {
             let k = 0.03 // per frame: ~2 s to settle at 30 fps
@@ -864,9 +924,11 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
         guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
         measureSkin(pb)
+        guardHighlights(pb)
         let wantJ = wantsJPEG(), wantH = wantsHEVC(), wantP = wantsPreview()
         guard wantJ || wantH || wantP else { return }
         let (rot, q, sat, con, blk) = lock.withLock { (rotation, quality, saturation, contrast, black) }
+        let (wm, tn) = lock.withLock { (warm, tint) }
         var img = CIImage(cvPixelBuffer: pb)
         let (on, zoom) = lock.withLock { (framing, softZoom) }
         let W = img.extent.width, H = img.extent.height
@@ -909,14 +971,19 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         if let cube {
             img = img.applyingFilter("CIColorCube", parameters: ["inputCubeDimension": 32, "inputCubeData": cube])
         }
-        if blk != 0 {
+        if blk != 0 || wm != 0 || tn != 0 {
             // Levels: crush (blk > 0) maps blk→0; lift (blk < 0) maps 0→-blk.
             let scale = blk > 0 ? 1 / (1 - blk) : 1 + blk
             let bias = blk > 0 ? -blk / (1 - blk) : -blk
+            // Manual balance as channel gains (warm: more red, less blue; tint: less green = magenta),
+            // normalised so brightness stays the same. Same pass as the levels.
+            var (gr, gg, gb) = (1 + 0.12 * wm, 1 - 0.08 * tn, 1 - 0.12 * wm)
+            let y = 0.2126 * gr + 0.7152 * gg + 0.0722 * gb
+            gr /= y; gg /= y; gb /= y
             img = img.applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: scale, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: scale, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: scale, w: 0),
+                "inputRVector": CIVector(x: scale * gr, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: scale * gg, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: scale * gb, w: 0),
                 "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 0)])
         }
         // Dither before the 8-bit output, in sRGB (where the 8-bit steps are), so smooth gradients like a lit

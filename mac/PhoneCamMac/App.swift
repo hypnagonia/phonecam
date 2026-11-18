@@ -40,11 +40,14 @@ struct MenuView: View {
                 Circle().fill(relay.phone == nil ? Color.red : Color.green).frame(width: 8, height: 8)
                 Text(relay.phone.map { "iPhone at \($0)" } ?? "iPhone not found").font(.headline)
             }
-            Text("Camera stream: \(relay.cameraTransport)").font(.caption).foregroundStyle(.secondary)
+            Text(relay.paused ? "Camera stopped" : "Camera stream: \(relay.cameraTransport)").font(.caption).foregroundStyle(.secondary)
             Text(relay.listening ? "Relay on localhost:\(Relay.port) · \(relay.connections) open"
                  : relay.portBusy ? "Port \(Relay.port) is used by another relay (that is fine)"
                  : "Starting relay…")
                 .font(.caption).foregroundStyle(.secondary)
+
+            Button(relay.paused ? "Start camera" : "Stop camera") { relay.setPaused(!relay.paused) }
+                .help("Stopped: apps see \"no signal\" and the iPhone camera sleeps (cooler, saves battery)")
 
             Divider()
             Text("Camera: \(installer.status)").font(.callout)

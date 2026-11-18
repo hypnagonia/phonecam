@@ -27,6 +27,14 @@ final class HEVCEncoder {
     private var congestion = 0
     private var lastAdapt = 0.0, cleanSince = 0.0
     private var appliedBitrate = 0
+    private var broken = false
+    private var lastOutput = 0.0, sessionStart = 0.0   // under lock
+
+    private func resetSession() {
+        if let session { VTCompressionSessionInvalidate(session) }
+        session = nil
+        lock.withLock { broken = false; forceKey = true }
+    }
 
     /// Bitrate actually used now (bits/s).
     var currentBitrate: Int { lock.withLock { current } }
@@ -75,11 +83,18 @@ final class HEVCEncoder {
                   colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
 
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary : nil
-        VTCompressionSessionEncodeFrame(session, imageBuffer: pb, presentationTimeStamp: pts, duration: .invalid,
-                                        frameProperties: props, infoFlagsOut: nil) { [weak self] status, _, sb in
-            guard status == noErr, let sb, let self else { return }
+        let st = VTCompressionSessionEncodeFrame(session, imageBuffer: pb, presentationTimeStamp: pts, duration: .invalid,
+                                                 frameProperties: props, infoFlagsOut: nil) { [weak self] status, _, sb in
+            guard let self else { return }
+            guard status == noErr, let sb else { if status != noErr { self.lock.withLock { self.broken = true } }; return }
             self.output(sb)
         }
+        // iOS kills the hardware encoder while the app is in the background or the phone is locked:
+        // start a new one (with a keyframe) instead of encoding into a dead session forever.
+        // Same if it silently stops giving frames for 2 s.
+        let now = CACurrentMediaTime()
+        let silent = lock.withLock { now - max(lastOutput, sessionStart) > 2 }
+        if st != noErr || silent || lock.withLock({ broken }) { resetSession() }
         return pb
     }
 
@@ -113,6 +128,7 @@ final class HEVCEncoder {
         VTCompressionSessionPrepareToEncodeFrames(s)
         session = s
         appliedBitrate = 0
+        lock.withLock { sessionStart = CACurrentMediaTime() }
     }
 
     private func applyBitrate(_ s: VTCompressionSession, _ bps: Int) {
@@ -124,6 +140,7 @@ final class HEVCEncoder {
     }
 
     private func output(_ sb: CMSampleBuffer) {
+        lock.withLock { lastOutput = CACurrentMediaTime() }
         guard let block = CMSampleBufferGetDataBuffer(sb) else { return }
         var isKey = true
         if let atts = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false) as? [[CFString: Any]],

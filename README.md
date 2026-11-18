@@ -17,10 +17,10 @@ browser.
 ## What you get
 
 - **Focus stays on your face**, not on the microphone in front of you. Or click anywhere on the preview to focus there.
-- **Steady brightness.** Exposure locks once it's right, so the picture doesn't pump when you move or your screen
-  flashes white.
-- **Natural skin under coloured lights.** With a blue light behind you and a warm lamp in front, your face still
-  looks like a face, and the background keeps its colour.
+- **No blown-out background.** Auto exposure keeps your face bright and pulls back when a white wall or window
+  starts to clip. Or lock it once it's right, so the picture doesn't pump when you move.
+- **Natural skin under coloured lights.** In Skin white balance, with a blue light behind you and a warm lamp in
+  front, your face still looks like a face, and the background keeps its colour.
 - **You stay in the middle of the frame.** The picture gently follows you, like a camera operator would, without
   jitter.
 - **Always upright and level.** Mount the phone any way you like (landscape, upside down, upright); the picture turns
@@ -67,6 +67,8 @@ You need an iPhone (iOS 17+), a Mac (macOS 13+) with Xcode, and a free Apple dev
 - **Light matters most.** A soft light in front of your face does more for the picture than any setting.
 - **Keep the app in front on the iPhone.** iOS stops the camera when the app is in the background. The screen stays
   on; the **Dim screen** button keeps the phone cool.
+- **Stop the camera** from the PhoneCam menu bar icon when you don't need it: apps see "no signal" and the iPhone
+  camera sleeps.
 - **Start at login:** turn it on in the PhoneCam menu bar icon so everything is ready after a restart.
 - **Something looks off?** The **Reset** button on the control page brings back the defaults.
 
@@ -78,10 +80,10 @@ Open `http://localhost:4747` on the Mac.
 |---|---|
 | **Lens** | Ultra-wide, wide, tele or front camera; auto-frame on or off; how tight the framing is; horizon levelling |
 | **Focus** | Follow your face, auto, or lock; manual distance |
-| **Exposure** | Auto, Lock (default) or Manual (ISO and shutter) |
-| **White balance** | Skin (default), Auto, Lock; how warm the skin should look |
-| **Color** | Saturation, contrast, black level, and separate strength for reds, greens and blues |
-| **Video** | 30 or 60 fps, quality, rotation |
+| **Exposure** | Auto (default), Lock or Manual (ISO and shutter) |
+| **White balance** | Auto (default), Skin or Lock; how warm the skin should look |
+| **Color** | Warmth and tint, saturation, contrast, black level, and separate strength for reds, greens and blues; Reset |
+| **Video** | 4K or 1080p capture (1080p keeps the iPhone cooler), 30 or 60 fps, quality, rotation |
 
 The preview on the page is off by default, since your apps already show the picture. Turn it on to click-to-focus.
 

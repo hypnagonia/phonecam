@@ -18,6 +18,7 @@ final class Relay: ObservableObject {
     @Published var phone: String?        // how the phone is reached, for the menu
     @Published var connections = 0
     @Published var cameraTransport = "–"  // how the camera stream arrives: UDP or TCP
+    @Published private(set) var paused = false // camera stopped from the menu: apps get "no signal", the iPhone sleeps
 
     private static let key: String = {
         let k = (Bundle.main.object(forInfoDictionaryKey: "PhoneCamKey") as? String) ?? ""
@@ -40,6 +41,7 @@ final class Relay: ObservableObject {
     private var active = 0                 // on q
     private var link = "none"              // on q: "usb", "wifi" (direct) or "none", for the control page
     private var transport = "–"            // on q: how the camera stream arrives
+    private var stopped = false            // on q: mirror of `paused`
 
     // The camera stream for local viewers (the camera extension), received from the phone over UDP.
     private lazy var udp: UDPReceiver = {
@@ -58,6 +60,21 @@ final class Relay: ObservableObject {
     }
     private var locals: [ObjectIdentifier: Local] = [:] // on q
     private var maintenance: DispatchSourceTimer?
+
+    /// Menu: stop or start the camera. Stopped, the camera stream is refused (apps show the "no signal"
+    /// card) and the iPhone is told to put its camera to sleep at once.
+    func setPaused(_ on: Bool) {
+        paused = on
+        q.async {
+            self.stopped = on
+            guard on else { return }
+            for id in Array(self.locals.keys) { self.dropLocal(id) }
+            self.udp.stop()
+            self.transport = "–"
+            DispatchQueue.main.async { self.cameraTransport = "–" }
+        }
+        if on { URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:\(Relay.port)/set?sleep=1")!).resume() }
+    }
 
     func start() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
@@ -182,6 +199,11 @@ final class Relay: ObservableObject {
     /// q: a local viewer (the camera extension) wants /hevc. Feed it from the UDP receiver; if no frame
     /// comes within 2.5 s (UDP blocked?), fall back to relaying /hevc over TCP like any other request.
     private func serveCamera(_ client: NWConnection, head: Data) {
+        if stopped {
+            let resp = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            client.send(content: Data(resp.utf8), completion: .contentProcessed { _ in client.cancel() })
+            return
+        }
         let l = Local(client, head: head)
         let id = ObjectIdentifier(l)
         locals[id] = l
