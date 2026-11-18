@@ -45,16 +45,17 @@ final class ProviderSource: NSObject, CMIOExtensionProviderSource {
 
 // MARK: - Device
 
-/// One 1920×1080 BGRA stream. Frames come from the MJPEG stream on localhost:4747; each decoded frame is
-/// sent at once. When nothing arrives (phone app closed), a "no signal" card keeps the camera alive.
+/// One 1920×1080 BGRA stream. Frames come from the HEVC stream on localhost:4747, decoded in hardware;
+/// each decoded frame is sent at once. When nothing arrives (phone app closed), a "no signal" card keeps the camera alive.
 final class DeviceSource: NSObject, CMIOExtensionDeviceSource {
     private(set) var device: CMIOExtensionDevice!
     private var streamSource: StreamSource!
     private var format: CMFormatDescription!
+    private var bufferFormat: CMFormatDescription?
     private var pool: CVPixelBufferPool!
     private let queue = DispatchQueue(label: "phonecam.camera", qos: .userInteractive)
     private var streaming = 0
-    private var client: MJPEGClient?
+    private var client: HEVCClient?
     private var idleTimer: DispatchSourceTimer?
     private var lastSent = 0.0
     private var lastBuffer: CVPixelBuffer?
@@ -106,8 +107,8 @@ final class DeviceSource: NSObject, CMIOExtensionDeviceSource {
             self.streaming += 1
             guard self.streaming == 1 else { return }
             log.info("start streaming")
-            let c = MJPEGClient(host: "127.0.0.1", port: 4747, queue: self.queue) { [weak self] jpeg in
-                self?.receive(jpeg)
+            let c = HEVCClient(host: "127.0.0.1", port: 4747, queue: self.queue) { [weak self] frame in
+                self?.receive(frame)
             }
             self.client = c
             c.start()
@@ -134,8 +135,8 @@ final class DeviceSource: NSObject, CMIOExtensionDeviceSource {
     }
 
     // queue
-    private func receive(_ jpeg: Data) {
-        guard streaming > 0, let pb = decode(jpeg) else { return }
+    private func receive(_ pb: CVPixelBuffer) {
+        guard streaming > 0 else { return }
         lastBuffer = pb
         send(pb)
     }
@@ -153,27 +154,26 @@ final class DeviceSource: NSObject, CMIOExtensionDeviceSource {
         var timing = CMSampleTimingInfo()
         timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock())
         timing.duration = CMTime(value: 1, timescale: frameRate)
+        // The description must match the buffer exactly (decoded frames carry HEVC colour tags), or the
+        // frame is dropped silently; build it from the buffer when the stream's default doesn't match.
+        var desc: CMFormatDescription = format
+        if !CMVideoFormatDescriptionMatchesImageBuffer(format, imageBuffer: pb) {
+            if let cached = bufferFormat, CMVideoFormatDescriptionMatchesImageBuffer(cached, imageBuffer: pb) {
+                desc = cached
+            } else {
+                var made: CMFormatDescription?
+                CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pb, formatDescriptionOut: &made)
+                if let made { bufferFormat = made; desc = made }
+            }
+        }
         var sb: CMSampleBuffer?
         let err = CMSampleBufferCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pb, dataReady: true,
-                                                     makeDataReadyCallback: nil, refcon: nil, formatDescription: format,
+                                                     makeDataReadyCallback: nil, refcon: nil, formatDescription: desc,
                                                      sampleTiming: &timing, sampleBufferOut: &sb)
         guard err == noErr, let sb else { return }
         streamSource.stream.send(sb, discontinuity: [],
                                  hostTimeInNanoseconds: UInt64(timing.presentationTimeStamp.seconds * Double(NSEC_PER_SEC)))
         lastSent = CACurrentMediaTime()
-    }
-
-    /// JPEG → 1920×1080 BGRA, letterboxed if the aspect differs.
-    private func decode(_ jpeg: Data) -> CVPixelBuffer? {
-        guard let src = CGImageSourceCreateWithData(jpeg as CFData, nil),
-              let img = CGImageSourceCreateImageAtIndex(src, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
-        else { return nil }
-        return draw { ctx, w, h in
-            let s = min(w / CGFloat(img.width), h / CGFloat(img.height))
-            let dw = CGFloat(img.width) * s, dh = CGFloat(img.height) * s
-            ctx.interpolationQuality = .medium
-            ctx.draw(img, in: CGRect(x: (w - dw) / 2, y: (h - dh) / 2, width: dw, height: dh))
-        }
     }
 
     private func makePlaceholder() -> CVPixelBuffer? {

@@ -2,3 +2,5 @@
 // Team ID: Xcode → Settings → Accounts, or developer.apple.com → Membership.
 DEVELOPMENT_TEAM = ABCDE12345
 PHONECAM_BUNDLE_ID = com.example.phonecam
+// Shared secret between the iPhone app and the Mac app (any random string, e.g. `openssl rand -hex 16`).
+PHONECAM_KEY = change-me

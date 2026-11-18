@@ -40,6 +40,7 @@ struct MenuView: View {
                 Circle().fill(relay.phone == nil ? Color.red : Color.green).frame(width: 8, height: 8)
                 Text(relay.phone.map { "iPhone at \($0)" } ?? "iPhone not found").font(.headline)
             }
+            Text("Camera stream: \(relay.cameraTransport)").font(.caption).foregroundStyle(.secondary)
             Text(relay.listening ? "Relay on localhost:\(Relay.port) · \(relay.connections) open"
                  : relay.portBusy ? "Port \(Relay.port) is used by another relay (that is fine)"
                  : "Starting relay…")
@@ -72,7 +73,9 @@ struct MenuView: View {
 final class Installer: NSObject, ObservableObject, OSSystemExtensionRequestDelegate {
     @Published var status = "checking…"
     @Published var needsApproval = false
-    private var id: String { Bundle.main.bundleIdentifier! + ".camera" }
+    // macOS starts an updated camera extension only after a reboot when an older build with the same
+    // name was loaded; a new name avoids that (".camera" → ".cam" → ".vcam"). Keep the extension stable.
+    private var id: String { Bundle.main.bundleIdentifier! + ".vcam" }
 
     func activate() {
         let r = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: id, queue: .main)

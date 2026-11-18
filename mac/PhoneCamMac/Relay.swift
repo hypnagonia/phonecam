@@ -1,25 +1,79 @@
 import Foundation
 import Network
+import QuartzCore
 
-/// localhost:4747 → PhoneCam on the iPhone (USB link first, then Wi‑Fi).
-/// The camera extension and the browser talk to localhost; only this app needs Local Network access.
+/// localhost:4747 → PhoneCam on the iPhone. The camera extension and the browser talk to localhost; only this
+/// app needs Local Network access. Every relayed request gets the shared key (Local.xcconfig → Info.plist),
+/// which the phone requires, so nothing else on the network can reach the camera.
+///
+/// Routes: the USB cable, or direct Wi‑Fi between iPhone and Mac (AWDL, like AirDrop). Never through the
+/// router: the Mac's own Wi‑Fi network interface is prohibited for every connection to the phone, so Bonjour
+/// can only resolve over the cable or peer-to-peer. The working route is remembered; new connections reuse
+/// it and only fall back to a full search when it stops answering. A probe every 5 s switches to a better
+/// route (e.g. the cable was plugged in).
 final class Relay: ObservableObject {
     static let port: UInt16 = 4747
     @Published var listening = false
     @Published var portBusy = false
-    @Published var phone: String?        // last address that answered
+    @Published var phone: String?        // how the phone is reached, for the menu
     @Published var connections = 0
+    @Published var cameraTransport = "–"  // how the camera stream arrives: UDP or TCP
+
+    private static let key: String = {
+        let k = (Bundle.main.object(forInfoDictionaryKey: "PhoneCamKey") as? String) ?? ""
+        return k.hasPrefix("$(") ? "" : k
+    }()
+
+    /// A way to reach the phone: an endpoint, optionally pinned to one interface (direct Wi‑Fi).
+    struct Route { let endpoint: NWEndpoint; let via: NWInterface? }
 
     private let q = DispatchQueue(label: "relay")
     private var listener: NWListener?
-    private var active = 0
+    private var listener6: NWListener?
+    private var browser: NWBrowser?
+    private let pathMonitor = NWPathMonitor()
+    private var routerWiFi: NWInterface?   // on q: the Mac's infrastructure Wi‑Fi (to the router): never used
+    private var bonjour: [NWEndpoint] = [] // on q: PhoneCam services seen on the network
+    private var bonjourUDP: [NWEndpoint] = [] // on q: its UDP stream service
+    private var udpBrowser: NWBrowser?
+    private var best: Route?               // on q: the route that worked last
+    private var active = 0                 // on q
+
+    // The camera stream for local viewers (the camera extension), received from the phone over UDP.
+    private lazy var udp: UDPReceiver = {
+        let r = UDPReceiver(queue: q, key: Relay.key)
+        r.onFrame = { [weak self] msg, isKey in self?.fanOut(msg, isKey: isKey) }
+        return r
+    }()
+    private final class Local {
+        let conn: NWConnection
+        let head: Data
+        var headerSent = false
+        var busy = false
+        var skipUntilKey = true
+        let since = CACurrentMediaTime()
+        init(_ c: NWConnection, head: Data) { conn = c; self.head = head }
+    }
+    private var locals: [ObjectIdentifier: Local] = [:] // on q
+    private var maintenance: DispatchSourceTimer?
 
     func start() {
-        q.async { self.listen() }
-        // Look for the phone now and then, so the menu shows where it is.
-        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.probe() }
-        probe()
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            self?.routerWiFi = path.availableInterfaces.first { $0.type == .wifi && !$0.name.hasPrefix("awdl") }
+        }
+        pathMonitor.start(queue: q)
+        q.async {
+            self.listen(); self.browse(); self.probe()
+            let t = DispatchSource.makeTimerSource(queue: self.q)
+            t.schedule(deadline: .now() + 1, repeating: 0.5)
+            t.setEventHandler { [weak self] in self?.maintainUDP() }
+            t.resume()
+            self.maintenance = t
+        }
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.q.async { self?.probe() } }
     }
+
+    // MARK: listening on localhost
 
     private func listen() {
         guard let l = makeListener(host: "127.0.0.1") else { return fail() }
@@ -39,7 +93,6 @@ final class Relay: ObservableObject {
             listener6 = l6
         }
     }
-    private var listener6: NWListener?
 
     private func makeListener(host: NWEndpoint.Host) -> NWListener? {
         let params = NWParameters.tcp
@@ -50,7 +103,7 @@ final class Relay: ObservableObject {
         return l
     }
 
-    /// Port taken (e.g. the Python relay is running): fine, the camera still gets its video. Retry later.
+    /// Port taken by something else: retry later.
     private func fail() {
         listener?.cancel()
         listener = nil
@@ -58,11 +111,35 @@ final class Relay: ObservableObject {
         q.asyncAfter(deadline: .now() + 5) { self.listen() }
     }
 
+    // MARK: relaying
+
     private func accept(_ client: NWConnection) {
         client.start(queue: q)
-        connectPhone(candidates()) { [weak self] phone in
+        readHead(client, Data()) { [weak self] head in
+            guard let self, let head else { client.cancel(); return }
+            if head.starts(with: Data("GET /hevc".utf8)) { self.serveCamera(client, head: head) }
+            else { self.proxy(client, head: head) }
+        }
+    }
+
+    /// The request head (up to the blank line), so the request can be routed and the key added.
+    private func readHead(_ c: NWConnection, _ buffer: Data, done: @escaping (Data?) -> Void) {
+        c.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, end, err in
+            var buf = buffer
+            if let data { buf.append(data) }
+            if buf.range(of: Data("\r\n\r\n".utf8)) != nil || buf.count > 32768 { done(buf) }
+            else if end || err != nil { done(nil) }
+            else { self?.readHead(c, buf, done: done) }
+        }
+    }
+
+    /// Relay a request to the phone over TCP, with the key added after the request line.
+    private func proxy(_ client: NWConnection, head: Data) {
+        // The remembered route first; a full search only when it fails.
+        let routes = (best.map { [$0] } ?? []) + candidates(withARP: best == nil)
+        connectPhone(routes) { [weak self] result in
             guard let self else { return }
-            guard let phone else {
+            guard let (phone, _) = result else {
                 let body = "PhoneCam is not reachable: open the PhoneCam app on the iPhone."
                 let resp = "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
                 client.send(content: Data(resp.utf8), completion: .contentProcessed { _ in client.cancel() })
@@ -79,8 +156,95 @@ final class Relay: ObservableObject {
                 self.active -= 1
                 self.publishCount()
             }
-            self.pipe(from: client, to: phone, close: close)
+            var out = head
+            if let line = head.range(of: Data("\r\n".utf8)), !Relay.key.isEmpty {
+                out = Data(head[..<line.upperBound]) + Data("X-PhoneCam-Key: \(Relay.key)\r\n".utf8) + head[line.upperBound...]
+            }
+            phone.send(content: out, completion: .contentProcessed { e in
+                if e != nil { close() } else { self.pipe(from: client, to: phone, close: close) }
+            })
             self.pipe(from: phone, to: client, close: close)
+        }
+    }
+
+    // MARK: camera stream over UDP
+
+    /// q: a local viewer (the camera extension) wants /hevc. Feed it from the UDP receiver; if no frame
+    /// comes within 2.5 s (UDP blocked?), fall back to relaying /hevc over TCP like any other request.
+    private func serveCamera(_ client: NWConnection, head: Data) {
+        let l = Local(client, head: head)
+        let id = ObjectIdentifier(l)
+        locals[id] = l
+        client.receive(minimumIncompleteLength: 1, maximumLength: 1024) { [weak self] _, _, end, err in
+            if end || err != nil { self?.dropLocal(id) }
+        }
+        if udp.started { udp.requestKey() } else { startUDP() }
+        q.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self, let l = self.locals[id], !l.headerSent else { return }
+            self.locals[id] = nil
+            DispatchQueue.main.async { self.cameraTransport = "TCP" }
+            self.proxy(l.conn, head: l.head)
+        }
+    }
+
+    private func dropLocal(_ id: ObjectIdentifier) {
+        guard let l = locals.removeValue(forKey: id) else { return }
+        l.conn.cancel()
+    }
+
+    /// q: subscribe over UDP: by Bonjour over direct Wi‑Fi first (brings up AWDL, no router), else by
+    /// Bonjour any way, else to the host the TCP route reaches.
+    private var udpStartedAt = 0.0
+    private var udpAttempt = 0 // which way to try; moves on each time a way gives no frames for 3 s
+    private func startUDP() {
+        udpStartedAt = CACurrentMediaTime()
+        let way = udpAttempt % 2
+        udpAttempt += 1
+        if way == 0, let ep = bonjourUDP.first { return udp.start(endpoint: ep, avoid: routerWiFi) }
+        let routes = (best.map { [$0] } ?? []) + candidates(withARP: best == nil)
+        connectPhone(routes) { [weak self] result in
+            guard let self, let (c, _) = result else { return }
+            let iface = c.currentPath?.availableInterfaces.first
+            if case .hostPort(let h, _) = c.currentPath?.remoteEndpoint {
+                self.udp.start(endpoint: .hostPort(host: h, port: 4747), via: iface, avoid: self.routerWiFi)
+            }
+            c.cancel()
+        }
+    }
+
+    /// q: a complete frame from UDP → every local viewer that can take it.
+    private func fanOut(_ msg: Data, isKey: Bool) {
+        var needKey = false
+        for (id, l) in locals {
+            if l.skipUntilKey && !isKey { continue }
+            if l.busy { l.skipUntilKey = true; needKey = true; continue }
+            l.skipUntilKey = false
+            l.busy = true
+            var out = msg
+            if !l.headerSent {
+                l.headerSent = true
+                out = Data("HTTP/1.1 200 OK\r\nContent-Type: application/x-phonecam-hevc\r\nConnection: close\r\n\r\n".utf8) + msg
+                DispatchQueue.main.async { self.cameraTransport = "UDP" }
+            }
+            l.conn.send(content: out, completion: .contentProcessed { [weak self] e in
+                self?.q.async {
+                    l.busy = false
+                    if e != nil { self?.dropLocal(id) }
+                }
+            })
+        }
+        if needKey { udp.requestKey() }
+    }
+
+    /// q: stop UDP when nobody watches; resubscribe when frames stop (the route may have changed).
+    private func maintainUDP() {
+        if locals.isEmpty {
+            if udp.started && CACurrentMediaTime() - udp.lastFrameTime > 5 { udp.stop() }
+            return
+        }
+        if udp.started && CACurrentMediaTime() - max(udp.lastFrameTime, udpStartedAt) > 3 {
+            udp.stop()
+            startUDP() // next way
         }
     }
 
@@ -113,44 +277,92 @@ final class Relay: ObservableObject {
         }
     }
 
-    /// Try addresses in order; the first that connects within 2 s wins.
-    private func connectPhone(_ ips: [String], done: @escaping (NWConnection?) -> Void) {
-        guard let ip = ips.first else { return done(nil) }
+    // MARK: finding the phone
+
+    /// The phone app announces "_phonecam._tcp"; keep the current list of where it is.
+    private func browse() {
+        let bp = NWParameters.tcp
+        bp.includePeerToPeer = true // find the phone over direct Wi‑Fi too
+        let b = NWBrowser(for: .bonjour(type: "_phonecam._tcp", domain: nil), using: bp)
+        b.browseResultsChangedHandler = { [weak self] results, _ in
+            self?.bonjour = results.map(\.endpoint)
+        }
+        b.stateUpdateHandler = { [weak self] s in
+            if case .failed = s { self?.q.asyncAfter(deadline: .now() + 3) { self?.browse() } }
+        }
+        b.start(queue: q)
+        browser = b
+        let ub = NWBrowser(for: .bonjour(type: "_phonecam._udp", domain: nil), using: bp)
+        ub.browseResultsChangedHandler = { [weak self] results, _ in self?.bonjourUDP = results.map(\.endpoint) }
+        ub.start(queue: q)
+        udpBrowser = ub
+    }
+
+    /// q: try routes in order; the first that connects within 2 s wins and becomes `best`.
+    private func connectPhone(_ routes: [Route], done: @escaping ((NWConnection, Route)?) -> Void) {
+        guard let route = routes.first else { return done(nil) }
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.connectionTimeout = 2
-        let c = NWConnection(host: NWEndpoint.Host(ip), port: NWEndpoint.Port(rawValue: Relay.port)!,
-                             using: NWParameters(tls: nil, tcp: tcp))
+        let params = NWParameters(tls: nil, tcp: tcp)
+        noRouter(params)
+        if let via = route.via { params.requiredInterface = via }
+        let c = NWConnection(to: route.endpoint, using: params)
         var finished = false
         c.stateUpdateHandler = { [weak self] s in
-            guard !finished else { return }
+            guard let self, !finished else { return }
             switch s {
             case .ready:
                 finished = true
-                DispatchQueue.main.async { self?.phone = ip }
-                done(c)
+                self.best = route
+                self.publishRoute(c, route)
+                done((c, route))
             case .failed, .cancelled, .waiting:
                 finished = true
                 c.cancel()
-                self?.connectPhone(Array(ips.dropFirst()), done: done)
+                self.connectPhone(Array(routes.dropFirst()), done: done)
             default: break
             }
         }
         c.start(queue: q)
     }
 
+    /// Cable or direct Wi‑Fi only: allow peer-to-peer, forbid the interface that leads to the router.
+    private func noRouter(_ p: NWParameters) {
+        p.includePeerToPeer = true
+        if let r = routerWiFi { p.prohibitedInterfaces = [r] }
+    }
+
+    private func publishRoute(_ c: NWConnection, _ route: Route) {
+        var host = "\(route.endpoint)"
+        if case .hostPort(let h, _) = c.currentPath?.remoteEndpoint ?? route.endpoint { host = "\(h)" }
+        let ifName = c.currentPath?.availableInterfaces.first?.name ?? ""
+        let label = ifName.hasPrefix("awdl") ? "direct Wi‑Fi" : "USB cable (\(ifName))"
+        DispatchQueue.main.async { self.phone = label }
+    }
+
+    /// q: every 5 s look for the best route from scratch (the cable may have come back).
     private func probe() {
-        q.async {
-            self.connectPhone(self.candidates()) { c in
-                c?.cancel()
-                if c == nil { DispatchQueue.main.async { self.phone = nil } }
-            }
+        connectPhone(candidates(withARP: true)) { [weak self] result in
+            guard let self else { return }
+            if let (c, _) = result { c.cancel(); return }
+            self.best = nil
+            DispatchQueue.main.async { self.phone = nil }
         }
+    }
+
+    /// Routes in order of preference. The ARP table (USB link-local addresses) costs a process launch,
+    /// so it is read by the background probe and on a full search, not for every relayed request.
+    private func candidates(withARP: Bool) -> [Route] {
+        let port = NWEndpoint.Port(rawValue: Relay.port)!
+        var out = withARP ? arpCandidates().map { Route(endpoint: .hostPort(host: NWEndpoint.Host($0), port: port), via: nil) } : []
+        out += bonjour.map { Route(endpoint: $0, via: nil) } // resolves over the cable or direct Wi‑Fi only
+        return out
     }
 
     /// The iPhone's addresses from the ARP table (USB link-local 169.254.x.x first), plus an optional
     /// host name set with `defaults write <bundle id> host My-iPhone.local`.
-    private func candidates() -> [String] {
+    private func arpCandidates() -> [String] {
         var ips: [String] = []
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")

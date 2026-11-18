@@ -92,6 +92,10 @@ enum Page {
     #mark{position:absolute;width:64px;height:64px;margin:-32px 0 0 -32px;pointer-events:none;opacity:0;transition:opacity .8s;
       border:1.5px solid var(--acc);border-radius:6px;box-shadow:0 0 0 1px #0006}
     #info{color:var(--faint);font-size:13px}
+    button.chip{cursor:pointer;font:inherit;font-size:13px}
+    button.chip.on{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}
+    #wrap.off{width:min(100%,960px);aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:var(--faint)}
+    #wrap.off::before,#wrap.off::after{display:none}
     aside{display:flex;flex-direction:column;gap:10px;overflow-y:auto;max-height:calc(100vh - 70px);padding-right:2px;scrollbar-width:thin;scrollbar-color:var(--knob) transparent}
     .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
     h3{margin:0 0 10px;font-size:15px;font-weight:600;color:var(--fg);display:flex;align-items:center;gap:8px}
@@ -117,21 +121,24 @@ enum Page {
     </style></head><body>
     <header>
       <div class="brand"><i></i>PhoneCam</div>
+      <button class="chip" id="reset" title="Return every setting to the PhoneCam defaults">Reset</button>
+      <button class="chip" id="prev" title="Video preview on this page (the PhoneCam camera works either way)">Preview off</button>
       <div class="chip live"><i></i>Live</div>
       <div class="chip"><b id="fpsOut">–</b>fps</div>
       <div class="chip"><b id="cl">–</b>viewers</div>
     </header>
     <div id="view">
       <div id="wrap"><canvas id="v"></canvas><div id="mark"></div></div>
-      <div id="info">Click the picture to focus and expose at that point · double-click a slider to reset it</div>
+      <div id="info">Preview <b id="pvOut">–</b> fps · Camera stream <b id="mbOut">–</b> Mbit/s (<span id="vwOut">–</span>) · Click the picture to focus and expose at that point · double-click a slider to reset it</div>
     </div>
     <aside>
       <section class="card">
         <h3>Lens</h3>
         <div class="seg" data-k="lens"><button data-v="ultra">0.5×</button><button data-v="wide">1×</button><button data-v="tele">5×</button><button data-v="front">Front</button></div>
         <div class="seg" data-k="frame"><button data-v="1">Auto-frame</button><button data-v="0">Fixed</button></div>
+        <div class="seg" data-k="level"><button data-v="1">Level horizon</button><button data-v="0">Off</button></div>
         <div class="row"><label>Zoom</label><input type="range" id="zoom" step="0.01"><output id="zoomOut"></output></div>
-        <div class="hint">Auto-frame keeps you centred by moving a crop of the full picture; Zoom sets how tight.</div>
+        <div class="hint">Auto-frame keeps you centred by moving a crop of the full picture; Zoom sets how tight. Level horizon straightens the picture when the phone is tilted (<span id="tiltOut">–</span>).</div>
       </section>
 
       <section class="card">
@@ -154,34 +161,31 @@ enum Page {
         <h3>White balance</h3>
         <div class="seg" data-k="wb"><button data-v="skin">Skin</button><button data-v="auto">Auto</button><button data-v="lock">Lock</button></div>
         <div class="row"><label>Temp, K</label><input type="range" id="temp" min="2500" max="9000" step="50"><output id="tempOut"></output></div>
-        <div class="hint">Skin keeps the face a natural tone under colored light.</div>
+        <div class="row"><label>Skin hue</label><input type="range" id="skinWarm" min="-1" max="1" step="0.01"><output id="skinWarmOut"></output></div>
+        <div class="hint">Skin: auto white balance for the scene, plus the hue of skin tones only is turned toward natural skin (<span id="skinInfo">–</span>). Skin hue: left = pinker, right = more golden.</div>
       </section>
 
       <section class="card">
         <h3>Color</h3>
         <div class="row"><label>Saturation</label><input type="range" id="sat" min="0" max="2" step="0.01"><output id="satOut"></output></div>
         <div class="row"><label>Contrast</label><input type="range" id="con" min="0.5" max="1.5" step="0.01"><output id="conOut"></output></div>
+        <div class="row"><label>Red</label><input type="range" id="red" min="0" max="1.5" step="0.01"><output id="redOut"></output></div>
+        <div class="row"><label>Green</label><input type="range" id="green" min="0" max="1.5" step="0.01"><output id="greenOut"></output></div>
+        <div class="row"><label>Blue</label><input type="range" id="blue" min="0" max="1.5" step="0.01"><output id="blueOut"></output></div>
         <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.1" step="0.002"><output id="blackOut"></output></div>
-      </section>
-
-      <section class="card">
-        <h3>Background blur <span>~3.5 ms</span></h3>
-        <div class="seg" data-k="blur"><button data-v="1">On</button><button data-v="0">Off</button></div>
-        <div class="row"><label>Strength</label><input type="range" id="blurAmt" min="0" max="1" step="0.002"><output id="blurAmtOut"></output></div>
-        <div class="hint">Person detection runs in parallel and does not slow the stream.</div>
+        <div class="hint">Red, Green, Blue change saturation of those hues only (Red includes skin and orange).</div>
       </section>
 
       <section class="card">
         <h3>Video</h3>
-        <div class="seg" data-k="res"><button data-v="720">720p</button><button data-v="1080">1080p</button><button data-v="4k">4K</button></div>
         <div class="seg" data-k="fps"><button data-v="30">30 fps</button><button data-v="60">60 fps</button></div>
-        <div class="seg" data-k="rot"><button data-v="0">0°</button><button data-v="90">90°</button><button data-v="180">180°</button><button data-v="270">270°</button></div>
+        <div class="seg" data-k="rot"><button data-v="auto">Auto</button><button data-v="0">0°</button><button data-v="90">90°</button><button data-v="180">180°</button><button data-v="270">270°</button></div>
         <div class="row"><label>Quality</label><input type="range" id="q" min="0.4" max="0.95" step="0.01"><output id="qOut"></output></div>
       </section>
 
       <section class="card">
         <h3>OBS</h3>
-        <div class="hint" style="margin-top:0">Browser Source, 1920×1080:</div>
+        <div class="hint" style="margin-top:0">Add a Video Capture Device and pick the <b>PhoneCam</b> camera. Without the Mac app, use a Browser Source (1920×1080) with:</div>
         <code id="obsUrl"></code>
       </section>
     </aside>
@@ -227,12 +231,18 @@ enum Page {
       setSlider('shutter',toLog(st.shutter,st.shutterMin,st.shutterMax),fmtShutter(st.shutter));
       setSlider('temp',st.temp,Math.round(st.temp));
       setSlider('sat',st.sat,Math.round(st.sat*100)+'%');
+      const sgn=x=>(x>0?'+':'')+Math.round(x*100);
+      setSlider('skinWarm',st.skinWarm,sgn(st.skinWarm));
+      $('skinInfo').textContent=st.wb==='skin'?('face '+st.faceHue+'°, shift '+(st.skinShift>0?'+':'')+st.skinShift+'°'):'off';
+      setSlider('red',st.red,Math.round(st.red*100)+'%');
+      setSlider('green',st.green,Math.round(st.green*100)+'%');
+      setSlider('blue',st.blue,Math.round(st.blue*100)+'%');
       setSlider('con',st.con,Math.round(st.con*100)+'%');
       setSlider('black',st.black,(st.black>0?'+':'')+Math.round(st.black*1000)/10);
-      setSlider('blurAmt',toLog(st.blurAmt,0.05,12),st.blurAmt<1?st.blurAmt.toFixed(2):st.blurAmt.toFixed(1));
       setSlider('q',st.q,Math.round(st.q*100)+'%');
+      $('tiltOut').textContent='tilt '+st.tilt+'°, rotation '+st.rotNow+'°';
       $('faceOut').textContent=st.focus==='face'?(st.faceSeen?'● face found':'no face'):'';
-      $('fpsOut').textContent=st.realFps; $('cl').textContent=st.clients;
+      $('fpsOut').textContent=st.realFps; $('cl').textContent=st.clients; $('mbOut').textContent=st.mbps; $('vwOut').textContent=st.viewers;
     }
 
     document.querySelectorAll('.seg').forEach(seg=>seg.addEventListener('click',e=>{
@@ -247,32 +257,42 @@ enum Page {
       iso:v=>({iso:fromLog(v,st.isoMin,st.isoMax)}),
       shutter:v=>({shutter:fromLog(v,st.shutterMin,st.shutterMax)}),
       temp:v=>({temp:v}), q:v=>({q:v}),
-      blurAmt:v=>({blurAmt:fromLog(v,0.05,12)}),
-      sat:v=>({sat:v}), con:v=>({con:v}), black:v=>({black:v}),
+      sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), con:v=>({con:v}), black:v=>({black:v}),
     };
     for(const [id,fn] of Object.entries(sliders)){
       const el=$(id);
       el.addEventListener('pointerdown',()=>busy.add(id));
       el.addEventListener('pointerup',()=>setTimeout(()=>busy.delete(id),600));
       el.addEventListener('input',()=>sendThrottled(fn(+el.value)));
-      const reset={blurAmt:toLog(3,0.05,12),sat:1.55,con:1,black:0,zoom:1,ev:0}[id];
+      const reset={red:1,green:1,skinWarm:0,blue:0.6,sat:1.2,con:1,black:0,zoom:1,ev:0}[id];
       if(reset!==undefined) el.addEventListener('dblclick',()=>{el.value=reset;send(fn(reset))});
     }
 
     const v=$('v'), mark=$('mark');
-    play(v);
+    $('reset').onclick=()=>{ if(confirm('Reset all settings to the defaults?')) send({reset:1}) };
+
+    // Preview is off by default: apps use the PhoneCam camera, the page only needs the settings.
+    let previewOn=false;
+    try{ previewOn=localStorage.getItem('preview')==='1' }catch(e){}
+    const prev=$('prev');
+    prev.classList.toggle('on',previewOn);
+    prev.textContent=previewOn?'Preview on':'Preview off';
+    prev.onclick=()=>{ try{ localStorage.setItem('preview',previewOn?'0':'1') }catch(e){} location.reload() };
+    if(previewOn){ v.dataset.preview='1'; play(v); }
+    else { $('wrap').classList.add('off'); v.style.display='none'; $('wrap').insertAdjacentHTML('beforeend','<span>Preview is off. The PhoneCam camera works in your apps; turn the preview on above to click-to-focus here.</span>') }
 
     // Reads the MJPEG stream with fetch: no copying of the whole buffer per chunk, JPEG decoded
     // off the main thread (createImageBitmap), only the newest frame drawn. No frame for 2 s → reconnect.
     function play(cv){
       const g=cv.getContext('2d',{alpha:false,desynchronized:true});
-      let ctl=null, last=0, pending=null, decoding=false;
+      let ctl=null, last=0, pending=null, decoding=false, shown=0;
+      setInterval(()=>{ const o=document.getElementById('pvOut'); if(o) o.textContent=shown; shown=0 },1000);
       function show(blob){
         if(decoding){ pending=blob; return }       // keep only the newest frame
         decoding=true;
         createImageBitmap(blob).then(bm=>{
           if(cv.width!==bm.width||cv.height!==bm.height){ cv.width=bm.width; cv.height=bm.height }
-          g.drawImage(bm,0,0); bm.close();
+          g.drawImage(bm,0,0); bm.close(); shown++;
         }).catch(()=>{}).finally(()=>{
           decoding=false;
           if(pending){ const b=pending; pending=null; show(b) }
@@ -291,7 +311,7 @@ enum Page {
           for(const c of chunks){ if(off>=out.length) break; const k=Math.min(c.length,out.length-off); out.set(c.subarray(0,k),off); off+=k }
           return out };
         try{
-          const r=await fetch('/video?'+Date.now(),{signal:ctl.signal,cache:'no-store'});
+          const r=await fetch('/video?'+(cv.dataset.preview?'preview=1&':'')+'t='+Date.now(),{signal:ctl.signal,cache:'no-store'});
           const rd=r.body.getReader();
           for(;;){
             const {value,done}=await rd.read(); if(done) break;
