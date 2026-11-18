@@ -1,102 +1,131 @@
 # PhoneCam
 
-**Use your iPhone as a Mac webcam with full manual camera control.**
+**Turn your iPhone into a great Mac webcam, and actually control it.**
 
 ![iOS 17+](https://img.shields.io/badge/iOS-17%2B-000000?logo=apple&logoColor=white)
-![macOS 13+](https://img.shields.io/badge/macOS-13%2B%20camera%20extension-000000?logo=apple&logoColor=white)
+![macOS 13+](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)
 ![Swift](https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white)
-![AVFoundation](https://img.shields.io/badge/AVFoundation-camera-0A84FF)
-![HEVC](https://img.shields.io/badge/HEVC-hardware-6E40C9)
 ![No dependencies](https://img.shields.io/badge/dependencies-none-2EA44F)
-![Output](https://img.shields.io/badge/camera-1080p%2030fps-6E40C9)
 
-macOS Continuity Camera gives you the picture but almost no control over it: there are no focus, exposure or white
-balance settings. PhoneCam runs the camera on the iPhone itself, does all processing there, and streams hardware HEVC
-to a small Mac app. The Mac app adds a **PhoneCam** camera to macOS for Zoom, Meet, Telegram, FaceTime, OBS and other
-apps, and serves a control page at `http://localhost:4747`.
+Your iPhone has a much better camera than your Mac. Apple's Continuity Camera lets you use it, but you can't
+change much: not where it focuses, not the exposure, not the colours.
+
+PhoneCam fixes that. Put the phone on a mount, open the app, and a **PhoneCam** camera shows up on your Mac in
+Zoom, Google Meet, Telegram, FaceTime, OBS and every other app. You tune the picture from a simple page in your
+browser.
+
+## What you get
+
+- **Focus stays on your face**, not on the microphone in front of you. Or click anywhere on the preview to focus there.
+- **Steady brightness.** Exposure locks once it's right, so the picture doesn't pump when you move or your screen
+  flashes white.
+- **Natural skin under coloured lights.** With a blue light behind you and a warm lamp in front, your face still
+  looks like a face, and the background keeps its colour.
+- **You stay in the middle of the frame.** The picture gently follows you, like a camera operator would, without
+  jitter.
+- **Always upright and level.** Mount the phone any way you like (landscape, upside down, upright); the picture turns
+  itself and straightens a slightly crooked horizon.
+- **Rich but natural colour.** Saturation, contrast and per-colour controls (tame a loud blue wall, keep skin as it is).
+- **Smooth and sharp.** Shot in 4K and 10-bit, sent as 1080p at 30 fps with hardware video compression.
+- **Private.** The phone talks only to your Mac, over the USB cable or a direct Wi‑Fi link between the two devices
+  (like AirDrop). It never goes through your router, and nothing else on your network can watch it.
+
+## Quick start
+
+You need an iPhone (iOS 17+), a Mac (macOS 13+) with Xcode, and a free Apple developer account.
+
+1. **Set up the project**
+
+   ```sh
+   brew install xcodegen
+   cp Local.xcconfig.example Local.xcconfig   # fill in your Team ID, a bundle id and a random key
+   xcodegen generate
+   ```
+
+2. **Install the iPhone app.** Open `PhoneCam.xcodeproj`, choose the `PhoneCam` scheme and your iPhone, press Run.
+   On the phone, turn on Developer Mode (Settings → Privacy & Security) and allow camera and local network access.
+
+3. **Install the Mac app**
+
+   ```sh
+   xcodebuild -project PhoneCam.xcodeproj -scheme PhoneCamMac -destination 'platform=macOS' \
+     -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
+   ditto build/Build/Products/Debug/PhoneCam.app /Applications/PhoneCam.app
+   open /Applications/PhoneCam.app
+   ```
+
+   Then allow the camera once: System Settings → General → Login Items & Extensions → Camera Extensions →
+   turn on **PhoneCam Camera**.
+
+4. **Use it.** Keep the PhoneCam app open on the iPhone. On the Mac, pick **PhoneCam** as the camera in your call
+   app, and open `http://localhost:4747` to adjust the picture.
+
+## Tips
+
+- **Use the USB cable when you can.** It's the most reliable link. Without it, PhoneCam uses direct Wi‑Fi
+  automatically, so keep Wi‑Fi on on both devices.
+- **Light matters most.** A soft light in front of your face does more for the picture than any setting.
+- **Keep the app in front on the iPhone.** iOS stops the camera when the app is in the background. The screen stays
+  on; the **Dim screen** button keeps the phone cool.
+- **Start at login:** turn it on in the PhoneCam menu bar icon so everything is ready after a restart.
+- **Something looks off?** The **Reset** button on the control page brings back the defaults.
+
+## The control page
+
+Open `http://localhost:4747` on the Mac.
+
+| Section | What it does |
+|---|---|
+| **Lens** | Ultra-wide, wide, tele or front camera; auto-frame on or off; how tight the framing is; horizon levelling |
+| **Focus** | Follow your face, auto, or lock; manual distance |
+| **Exposure** | Auto, Lock (default) or Manual (ISO and shutter) |
+| **White balance** | Skin (default), Auto, Lock; how warm the skin should look |
+| **Color** | Saturation, contrast, black level, and separate strength for reds, greens and blues |
+| **Video** | 30 or 60 fps, quality, rotation |
+
+The preview on the page is off by default, since your apps already show the picture. Turn it on to click-to-focus.
+
+---
+
+## For developers
+
+### How it works
 
 ```mermaid
 flowchart LR
-    A["iPhone<br/>PhoneCam app<br/>camera · face tracking · colour · HEVC"] -- "USB · direct Wi‑Fi · Wi‑Fi<br/>HEVC + control (with key)" --> B["Mac<br/>PhoneCam menu bar app<br/>relay on localhost:4747"]
+    A["iPhone app<br/>camera · face tracking · colour · HEVC"] -- "USB or direct Wi‑Fi<br/>UDP video + HTTP control, with key" --> B["Mac menu bar app<br/>localhost:4747"]
     B --> E["PhoneCam camera<br/>(camera extension)<br/>Zoom · Meet · OBS · FaceTime"]
     B --> C["Browser<br/>control page"]
 ```
 
-## Features
+All picture processing happens on the iPhone. It encodes 1920×1080 HEVC in hardware and sends it over UDP (a lost
+packet costs a frame or two instead of a stall). The Mac app receives it, serves it to the camera extension on
+localhost, and relays the control page. The extension only decodes frames and hands them to apps, so it rarely needs
+updating.
 
-| | |
+| File | Role |
 |---|---|
-| **Focus** | Follows your face (default), continuous auto or locked. Click the preview to focus on a point; manual distance slider |
-| **Exposure** | Lock (default) keeps the metered brightness but moves the shutter to 1/30 s and lowers ISO for less noise. Also auto with EV, or manual ISO and shutter |
-| **White balance** | **Skin** (default): auto white balance for the scene, plus the hue of skin tones only is turned toward natural skin, leaving the background and clothes alone. Also auto, lock, or a Kelvin slider |
-| **Auto-frame** | A crop of the 4K picture calmly follows your face (or your body when the face is hidden) and keeps you centred |
-| **Orientation** | Picked from gravity (0/90/180/270°); an upright phone gives a 16:9 crop of the tall frame. The horizon is levelled automatically (up to ±15°) |
-| **Color** | Saturation (skin tones protected), contrast, black level, and saturation per hue: red, green, blue |
-| **Stream** | Always 4K capture, 1920×1080 HEVC to the Mac, 30 / 60 fps. Bitrate follows the Quality slider (4–24 Mbit/s) and drops automatically when the link can't keep up |
-| **Connection** | USB cable, else direct Wi‑Fi between iPhone and Mac (AWDL, no router), else the normal Wi‑Fi; the phone is found by Bonjour or a quick scan |
-| **Privacy** | The phone only answers requests that carry the shared key, which the Mac app adds; nobody else on the network can watch or change anything |
+| `PhoneCam/Camera.swift` | Capture and camera controls, face and body tracking, skin hue correction, auto-frame, orientation and levelling, colour grading, dithering |
+| `PhoneCam/Encoder.swift` | Hardware HEVC encoder: real time, keyframes on demand, adaptive bitrate |
+| `PhoneCam/UDPStreamer.swift` | Video over UDP: paced packets, keyframe and loss requests from the Mac |
+| `PhoneCam/Server.swift` | HTTP server: key check, Bonjour, control API, preview and fallback streams |
+| `PhoneCam/Page.swift` | The control page |
+| `mac/PhoneCamMac/` | Menu bar app: finds the phone (cable or direct Wi‑Fi only), receives UDP video, relays requests with the key, installs the camera extension |
+| `mac/CameraExtension/` | CoreMediaIO camera extension: hardware HEVC decoding, "no signal" card |
+| `scripts/hooks/pre-push` | Blocks pushes that would publish private data (`git config core.hooksPath scripts/hooks`) |
 
-## Requirements
-
-- An iPhone on iOS 17+ and a Mac on macOS 13+ with Xcode
-- An Apple developer account; a free one is enough to run the apps on your own devices
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
-
-## Build and install
-
-```sh
-cp Local.xcconfig.example Local.xcconfig   # set DEVELOPMENT_TEAM, a bundle id and a random PHONECAM_KEY
-xcodegen generate
-```
-
-**iPhone:** open `PhoneCam.xcodeproj`, pick the `PhoneCam` scheme and your iPhone, press Run.
-1. Enable Developer Mode: Settings → Privacy & Security.
-2. On first launch, allow camera and local network access.
-3. Keep the app in the foreground, because iOS stops the camera in the background. The screen stays on; the **Dim
-   screen** button keeps the phone cool.
-
-**Mac:**
-
-```sh
-xcodebuild -project PhoneCam.xcodeproj -scheme PhoneCamMac -destination 'platform=macOS' \
-  -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
-ditto build/Build/Products/Debug/PhoneCam.app /Applications/PhoneCam.app   # system extensions install only from /Applications
-open /Applications/PhoneCam.app
-```
-
-The app lives in the menu bar. Approve the camera extension once in System Settings → General → Login Items &
-Extensions → Camera Extensions, then pick **PhoneCam** as the camera in any app. When the phone app is closed, the
-camera shows a "no signal" card. The menu shows how the phone is connected and has "Start at login".
-
-> macOS starts an *updated* camera extension only after a reboot if an older build with the same bundle id was
-> loaded. The extension is kept small and stable (it only receives frames) so this rarely matters; to update it without
-> a reboot, give it a new bundle id suffix in `project.yml` and the installer in `mac/PhoneCamMac/App.swift`.
-
-## Usage
-
-Open `http://localhost:4747` for the control page. The preview is off by default (apps use the camera); turn it on to
-click-to-focus.
+### Endpoints (through `http://localhost:4747`)
 
 | Path | What |
 |---|---|
 | `/` | Control page |
-| `/hevc` | The camera stream (used by the camera extension) |
-| `/video` | MJPEG: `?preview=1` is a light 640×360 preview; without it, full 1080p (for an OBS Browser Source) |
-| `/obs` | Full-size video page for an OBS Browser Source |
 | `/state`, `/set?key=value` | JSON API used by the page |
+| `/hevc` | Camera stream (used by the camera extension) |
+| `/video?preview=1` | Light 640×360 MJPEG preview; without `preview`, full 1080p for an OBS Browser Source |
+| `/obs` | Full-size video page |
 
-> **USB is the best link.** Over a cable the phone has a link-local address (`169.254.x.x`): about 1 ms latency and
-> full bitrate. Without it, direct Wi‑Fi is used, then the router.
+### Notes
 
-## How it works
-
-| File | Role |
-|---|---|
-| `PhoneCam/Camera.swift` | Capture and device controls, face and body tracking, skin hue correction, auto-frame, orientation and levelling (CoreMotion), Core Image grading |
-| `PhoneCam/Encoder.swift` | Hardware HEVC encoder: real time, no reordering, keyframe on demand, adaptive bitrate |
-| `PhoneCam/Server.swift` | HTTP server on Network.framework: key check, Bonjour (incl. direct Wi‑Fi), HEVC and MJPEG broadcast, JSON API |
-| `PhoneCam/Page.swift` | Control page and the OBS page |
-| `mac/PhoneCamMac/` | Menu bar app: localhost relay (adds the key, remembers the working route), camera extension installer, start at login |
-| `mac/CameraExtension/` | CoreMediaIO camera extension: hardware HEVC decoding into 1920×1080 frames, "no signal" card |
-| `scripts/hooks/pre-push` | Blocks pushes that would publish private data; enable with `git config core.hooksPath scripts/hooks` |
-| `project.yml` | XcodeGen spec. Signing settings and the key live in the git-ignored `Local.xcconfig` |
+- Signing settings and the shared key live in the git-ignored `Local.xcconfig`.
+- macOS starts an *updated* camera extension only after a reboot if an older build with the same bundle id was loaded.
+  To update it without a reboot, give it a new bundle id suffix in `project.yml` and in `mac/PhoneCamMac/App.swift`.
