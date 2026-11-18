@@ -93,6 +93,8 @@ enum Page {
       border:1.5px solid var(--acc);border-radius:6px;box-shadow:0 0 0 1px #0006}
     #info{color:var(--faint);font-size:13px}
     button.chip{cursor:pointer;font:inherit;font-size:13px}
+    #link{color:var(--fg)} #link.warn{color:var(--dim)}
+    #heat{color:#ff9f0a} .chip[hidden]{display:none}
     button.chip.on{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}
     #wrap.off{width:min(100%,960px);aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:var(--faint)}
     #wrap.off::before,#wrap.off::after{display:none}
@@ -121,6 +123,9 @@ enum Page {
     </style></head><body>
     <header>
       <div class="brand"><i></i>PhoneCam</div>
+      <div class="chip" id="sleep" title="No app uses the camera: the iPhone camera sleeps and wakes in about a second when it is used" hidden>Camera asleep</div>
+      <div class="chip" id="heat" title="iPhone temperature (iOS thermal state)" hidden></div>
+      <div class="chip" id="link" title="How the Mac reaches the iPhone">–</div>
       <button class="chip" id="reset" title="Return every setting to the PhoneCam defaults">Reset</button>
       <button class="chip" id="prev" title="Video preview on this page (the PhoneCam camera works either way)">Preview off</button>
       <div class="chip live"><i></i>Live</div>
@@ -176,13 +181,6 @@ enum Page {
         <div class="hint">Red, Green, Blue change saturation of those hues only (Red includes skin and orange).</div>
       </section>
 
-      <section class="card">
-        <h3>Vanity</h3>
-        <div class="row"><label>Eyes</label><input type="range" id="eyes" min="0" max="1" step="0.01"><output id="eyesOut"></output></div>
-        <div class="row"><label>Eye blue</label><input type="range" id="eyeBlue" min="0" max="1" step="0.01"><output id="eyeBlueOut"></output></div>
-        <div class="row"><label>Teeth</label><input type="range" id="teeth" min="0" max="1" step="0.01"><output id="teethOut"></output></div>
-        <div class="hint">Eyes: clearer, cleaner whites, a bit more iris colour. Eye blue: turns the iris toward blue (works best on grey, green and blue eyes). Teeth: less yellow when your mouth is open. 0 switches each off completely.</div>
-      </section>
 
       <section class="card">
         <h3>Video</h3>
@@ -212,6 +210,16 @@ enum Page {
       timer=setTimeout(()=>{const x=pending;pending=null;timer=null;send(x)},70);
     }
     async function poll(){ try{ st=await (await fetch('/state')).json(); render(); }catch(e){} }
+    // Link type comes from the Mac app (it knows whether the phone is on the cable or direct Wi‑Fi).
+    async function pollLink(){
+      try{
+        const l=await (await fetch('/link')).json();
+        const name={usb:'USB cable',wifi:'Direct Wi‑Fi',none:'iPhone not found'}[l.link]||l.link;
+        $('link').textContent=name+(l.camera&&l.camera!=='–'?' · '+l.camera:'');
+        $('link').classList.toggle('warn',l.link!=='usb');
+      }catch(e){ $('link').textContent='–' }
+    }
+    setInterval(pollLink,2000); pollLink();
     setInterval(poll,1000); poll();
 
     // log scale helpers for ISO and shutter
@@ -238,9 +246,6 @@ enum Page {
       setSlider('iso',toLog(st.iso,st.isoMin,st.isoMax),Math.round(st.iso));
       setSlider('shutter',toLog(st.shutter,st.shutterMin,st.shutterMax),fmtShutter(st.shutter));
       setSlider('temp',st.temp,Math.round(st.temp));
-      setSlider('eyeBlue',st.eyeBlue,Math.round(st.eyeBlue*100)+'%');
-      setSlider('teeth',st.teeth,Math.round(st.teeth*100)+'%'+(st.teeth>0.01&&!st.mouthOpen?' –':''));
-      setSlider('eyes',st.eyes,Math.round(st.eyes*100)+'%'+(st.eyes>0.01&&!st.eyesSeen?' –':''));
       setSlider('sat',st.sat,Math.round(st.sat*100)+'%');
       const sgn=x=>(x>0?'+':'')+Math.round(x*100);
       setSlider('skinWarm',st.skinWarm,sgn(st.skinWarm));
@@ -253,6 +258,9 @@ enum Page {
       setSlider('q',st.q,Math.round(st.q*100)+'%');
       $('tiltOut').textContent='tilt '+st.tilt+'°, rotation '+st.rotNow+'°';
       $('faceOut').textContent=st.focus==='face'?(st.faceSeen?'● face found':'no face'):'';
+      $('sleep').hidden=!st.asleep;
+      const heat=$('heat'); heat.hidden=!st.thermal||st.thermal==='ok';
+      heat.textContent={warm:'iPhone warm',hot:'iPhone hot: lower load',critical:'iPhone overheating'}[st.thermal]||'';
       $('fpsOut').textContent=st.realFps; $('cl').textContent=st.clients; $('mbOut').textContent=st.mbps; $('vwOut').textContent=st.viewers;
     }
 
@@ -268,14 +276,14 @@ enum Page {
       iso:v=>({iso:fromLog(v,st.isoMin,st.isoMax)}),
       shutter:v=>({shutter:fromLog(v,st.shutterMin,st.shutterMax)}),
       temp:v=>({temp:v}), q:v=>({q:v}),
-      eyes:v=>({eyes:v}), teeth:v=>({teeth:v}), eyeBlue:v=>({eyeBlue:v}), sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), con:v=>({con:v}), black:v=>({black:v}),
+      sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), con:v=>({con:v}), black:v=>({black:v}),
     };
     for(const [id,fn] of Object.entries(sliders)){
       const el=$(id);
       el.addEventListener('pointerdown',()=>busy.add(id));
       el.addEventListener('pointerup',()=>setTimeout(()=>busy.delete(id),600));
       el.addEventListener('input',()=>sendThrottled(fn(+el.value)));
-      const reset={eyes:0,teeth:0,eyeBlue:0,red:1,green:1,skinWarm:0,blue:0.6,sat:1.2,con:1,black:0,zoom:1,ev:0}[id];
+      const reset={red:1,green:1,skinWarm:0,blue:0.6,sat:1.2,con:1,black:0,zoom:1,ev:0}[id];
       if(reset!==undefined) el.addEventListener('dblclick',()=>{el.value=reset;send(fn(reset))});
     }
 

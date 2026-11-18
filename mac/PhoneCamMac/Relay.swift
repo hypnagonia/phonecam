@@ -38,6 +38,8 @@ final class Relay: ObservableObject {
     private var udpBrowser: NWBrowser?
     private var best: Route?               // on q: the route that worked last
     private var active = 0                 // on q
+    private var link = "none"              // on q: "usb", "wifi" (direct) or "none", for the control page
+    private var transport = "–"            // on q: how the camera stream arrives
 
     // The camera stream for local viewers (the camera extension), received from the phone over UDP.
     private lazy var udp: UDPReceiver = {
@@ -118,6 +120,7 @@ final class Relay: ObservableObject {
         readHead(client, Data()) { [weak self] head in
             guard let self, let head else { client.cancel(); return }
             if head.starts(with: Data("GET /hevc".utf8)) { self.serveCamera(client, head: head) }
+            else if head.starts(with: Data("GET /link".utf8)) { self.replyLink(client) }
             else { self.proxy(client, head: head) }
         }
     }
@@ -167,6 +170,13 @@ final class Relay: ObservableObject {
         }
     }
 
+    /// q: answered here, not by the phone: how the Mac reaches the phone (for the control page).
+    private func replyLink(_ c: NWConnection) {
+        let body = "{\"link\":\"\(link)\",\"camera\":\"\(locals.isEmpty ? "–" : transport)\"}"
+        let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n\(body)"
+        c.send(content: Data(resp.utf8), completion: .contentProcessed { _ in c.cancel() })
+    }
+
     // MARK: camera stream over UDP
 
     /// q: a local viewer (the camera extension) wants /hevc. Feed it from the UDP receiver; if no frame
@@ -182,6 +192,7 @@ final class Relay: ObservableObject {
         q.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             guard let self, let l = self.locals[id], !l.headerSent else { return }
             self.locals[id] = nil
+            self.transport = "TCP"
             DispatchQueue.main.async { self.cameraTransport = "TCP" }
             self.proxy(l.conn, head: l.head)
         }
@@ -224,6 +235,7 @@ final class Relay: ObservableObject {
             if !l.headerSent {
                 l.headerSent = true
                 out = Data("HTTP/1.1 200 OK\r\nContent-Type: application/x-phonecam-hevc\r\nConnection: close\r\n\r\n".utf8) + msg
+                transport = "UDP"
                 DispatchQueue.main.async { self.cameraTransport = "UDP" }
             }
             l.conn.send(content: out, completion: .contentProcessed { [weak self] e in
@@ -338,6 +350,7 @@ final class Relay: ObservableObject {
         if case .hostPort(let h, _) = c.currentPath?.remoteEndpoint ?? route.endpoint { host = "\(h)" }
         let ifName = c.currentPath?.availableInterfaces.first?.name ?? ""
         let label = ifName.hasPrefix("awdl") ? "direct Wi‑Fi" : "USB cable (\(ifName))"
+        link = ifName.hasPrefix("awdl") ? "wifi" : "usb"
         DispatchQueue.main.async { self.phone = label }
     }
 
@@ -347,6 +360,7 @@ final class Relay: ObservableObject {
             guard let self else { return }
             if let (c, _) = result { c.cancel(); return }
             self.best = nil
+            self.link = "none"
             DispatchQueue.main.async { self.phone = nil }
         }
     }
