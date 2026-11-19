@@ -29,7 +29,9 @@ struct PhoneCamMacApp: App {
 
 enum CamStatus {
     case off, on, error
-    var color: NSColor { self == .on ? .systemGreen : self == .error ? .systemRed : .secondaryLabelColor }
+    /// a calm emerald for "on" (#4DC28A): the system green is too acid in the menu bar
+    static let onColor = NSColor(srgbRed: 0.30, green: 0.76, blue: 0.54, alpha: 1)
+    var color: NSColor { self == .on ? Self.onColor : self == .error ? .systemRed : .secondaryLabelColor }
     var label: String { self == .on ? "PhoneCam: on" : self == .error ? "PhoneCam: needs attention" : "PhoneCam: off" }
 }
 
