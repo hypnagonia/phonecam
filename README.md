@@ -9,9 +9,15 @@ router.
 ## Features
 
 - Focus stays on your face (or click to focus); auto exposure that doesn't blow out the background
-- Natural skin under coloured lights; auto framing and horizon levelling
+- Natural skin under coloured lights; horizon levelling; auto framing that follows you calmly, like a camera
+  operator (ignores small moves and leaning in, then pans slowly)
 - Colour controls: warmth, tint, saturation, contrast, HSL, looks and `.cube` LUTs; presets
+- **HSL auto 2:** you stand out from the room. Clothes get richer and cleaner colours, skin a warm tan (neither red
+  nor green), one small colourful thing behind you becomes the accent if there is one, big coloured walls get
+  calmer, milky blacks get deeper. Decided slowly from the last half minute
+- Whiter teeth when your mouth is open (Teeth slider)
 - 4K / 10-bit capture, sent as 1080p HEVC at 30 fps; no flicker bands; cools down when the iPhone gets hot
+- Saves the iPhone: with nobody watching the camera sleeps, the screen goes dark after 10 s untouched
 
 ## Setup
 
@@ -38,7 +44,8 @@ xcodegen generate
 
 **Tips:** use the USB cable when you can; good light in front of your face matters most; keep PhoneCam in front on
 the iPhone (iOS stops the camera in the background; it restarts by itself, and the menu bar icon and the control
-page show why it stopped); stop the camera from the menu bar icon when you don't need it.
+page show why it stopped); stop the camera from the menu bar icon when you don't need it. The menu bar icon is green
+while the camera works, grey when it is stopped or the phone isn't found, red when something needs your attention.
 
 ## Developers
 
@@ -47,10 +54,10 @@ iPhone app captures, processes and encodes HEVC → UDP → Mac menu bar app (`l
 
 | Path | Role |
 |---|---|
-| `PhoneCam/` | iPhone app: capture, picture pipeline, encoder, UDP streamer, HTTP server, control page |
+| `PhoneCam/` | iPhone app: capture, picture pipeline, encoder, UDP streamer, HTTP server, control page; `Camera+Teeth.swift` finds the mouth with Vision face landmarks |
 | `mac/PhoneCamMac/` | Menu bar app: finds the phone, receives video, relays requests with the key |
 | `mac/CameraExtension/` | CoreMediaIO camera extension |
-| `Core/` | Shared pure logic with unit tests (`swift test --package-path Core`): stream format, UDP packets, orientation and levelling, bitrate, colour, LUTs, presets |
+| `Core/` | Shared pure logic with unit tests (`swift test --package-path Core`): stream format, UDP packets, orientation and levelling, bitrate, colour (HSL, auto accents, HSL auto 2, skin tan, auto tone), LUTs, presets |
 | `scripts/hooks/pre-push` | Blocks pushes with private data (`git config core.hooksPath scripts/hooks`) |
 
 Endpoints: `/` control page · `/state`, `/set?key=value` API · `/hevc` camera stream · `/video` MJPEG (OBS
