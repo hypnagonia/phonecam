@@ -36,8 +36,9 @@ xcodegen generate
    Then enable **PhoneCam Camera** in System Settings → General → Login Items & Extensions → Camera Extensions.
 3. **Use:** keep the app open on the iPhone, pick **PhoneCam** as the camera, adjust at `http://localhost:4747`.
 
-**Tips:** use the USB cable when you can; good light in front of your face matters most; stop the camera from the
-menu bar icon when you don't need it.
+**Tips:** use the USB cable when you can; good light in front of your face matters most; keep PhoneCam in front on
+the iPhone (iOS stops the camera in the background; it restarts by itself, and the menu bar icon and the control
+page show why it stopped); stop the camera from the menu bar icon when you don't need it.
 
 ## Developers
 
@@ -49,7 +50,7 @@ iPhone app captures, processes and encodes HEVC → UDP → Mac menu bar app (`l
 | `PhoneCam/` | iPhone app: capture, picture pipeline, encoder, UDP streamer, HTTP server, control page |
 | `mac/PhoneCamMac/` | Menu bar app: finds the phone, receives video, relays requests with the key |
 | `mac/CameraExtension/` | CoreMediaIO camera extension |
-| `Core/` | Shared logic with unit tests (`swift test --package-path Core`) |
+| `Core/` | Shared pure logic with unit tests (`swift test --package-path Core`): stream format, UDP packets, orientation and levelling, bitrate, colour, LUTs, presets |
 | `scripts/hooks/pre-push` | Blocks pushes with private data (`git config core.hooksPath scripts/hooks`) |
 
 Endpoints: `/` control page · `/state`, `/set?key=value` API · `/hevc` camera stream · `/video` MJPEG (OBS
