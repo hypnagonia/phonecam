@@ -3,10 +3,10 @@ import Foundation
 import Network
 import QuartzCore
 import VideoToolbox
+import PhoneCamCore
 
 /// Reads the HEVC stream (GET /hevc) and decodes it in hardware into 1920×1080 BGRA frames.
-/// Wire format: see `HEVCEncoder` in the iOS app: [u8 type][u32 BE length][payload],
-/// type 1 = parameter sets, type 2 = one access unit (4-byte length-prefixed NAL units).
+/// Wire format: `HEVCWire` in PhoneCamCore.
 /// Reconnects after errors and when no frame arrives for 2 s.
 final class HEVCClient {
     private let host: NWEndpoint.Host
@@ -14,8 +14,7 @@ final class HEVCClient {
     private let queue: DispatchQueue
     private let onFrame: (CVPixelBuffer) -> Void
     private var conn: NWConnection?
-    private var buffer = Data()
-    private var inHeader = true
+    private var reader = HEVCWire.Reader()
     private var lastFrame = 0.0
     private var running = false
     private var watchdog: DispatchSourceTimer?
@@ -58,8 +57,7 @@ final class HEVCClient {
 
     private func connect() {
         guard running else { return }
-        buffer.removeAll(keepingCapacity: true)
-        inHeader = true
+        reader = HEVCWire.Reader()
         lastFrame = CACurrentMediaTime()
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -90,47 +88,25 @@ final class HEVCClient {
         c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, err in
             guard let self, c === self.conn else { return }
             if let data, !data.isEmpty {
-                self.buffer.append(data)
-                self.parse()
+                self.parse(data)
             }
             if done || err != nil { c.cancel() } else { self.read(c) }
         }
     }
 
-    private func parse() {
-        if inHeader {
-            guard let r = buffer.range(of: Data("\r\n\r\n".utf8)) else {
-                if buffer.count > 16 * 1024 { conn?.cancel() } // not our server
-                return
+    private func parse(_ data: Data) {
+        do {
+            for m in try reader.feed(data) {
+                if m.type == HEVCWire.config { configure(m.payload) } else if m.type == HEVCWire.frame { decode(m.payload) }
             }
-            buffer.removeSubrange(buffer.startIndex..<r.upperBound)
-            inHeader = false
-        }
-        while buffer.count >= 5 {
-            let b = buffer.startIndex
-            let type = buffer[b]
-            let len = Int(UInt32(buffer[b + 1]) << 24 | UInt32(buffer[b + 2]) << 16 | UInt32(buffer[b + 3]) << 8 | UInt32(buffer[b + 4]))
-            guard len < 16 << 20 else { conn?.cancel(); return } // garbage
-            guard buffer.count >= 5 + len else { return }
-            let payload = Data(buffer[(b + 5)..<(b + 5 + len)])
-            buffer.removeSubrange(b..<(b + 5 + len))
-            if type == 1 { configure(payload) } else if type == 2 { decode(payload) }
+        } catch {
+            conn?.cancel() // not our server, or out of step: reconnect
         }
     }
 
     /// Parameter sets → format description; a new decoder only when the format changed.
     private func configure(_ p: Data) {
-        guard let count = p.first, count > 0 else { return }
-        var sets: [Data] = []
-        var i = p.startIndex + 1
-        for _ in 0..<Int(count) {
-            guard i + 4 <= p.endIndex else { return }
-            let n = Int(UInt32(p[i]) << 24 | UInt32(p[i + 1]) << 16 | UInt32(p[i + 2]) << 8 | UInt32(p[i + 3]))
-            i += 4
-            guard i + n <= p.endIndex else { return }
-            sets.append(Data(p[i..<(i + n)]))
-            i += n
-        }
+        guard let sets = HEVCWire.splitParameterSets(p) else { return }
         var fmt: CMVideoFormatDescription?
         let status: OSStatus = sets.withUnsafeBufferPointers { ptrs, sizes in
             CMVideoFormatDescriptionCreateFromHEVCParameterSets(

@@ -2,6 +2,7 @@ import CoreImage
 import QuartzCore
 import CoreMedia
 import VideoToolbox
+import PhoneCamCore
 
 /// Hardware HEVC encoder for the /hevc stream: 1920×1080, real time, no frame reordering (no added
 /// latency), a keyframe every 2 s and on request (a new viewer starts at once).
@@ -55,6 +56,8 @@ final class HEVCEncoder {
     }
     private var frameRate = 30
 
+    private static let srgb = CGColorSpace(name: CGColorSpace.sRGB)
+
     /// videoQueue: render the finished picture (origin 0,0, 1920×1080) and encode it. Returns the rendered
     /// frame, so the JPEG preview can reuse it instead of rendering the whole picture a second time.
     @discardableResult
@@ -90,7 +93,7 @@ final class HEVCEncoder {
         CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
         ci.render(img, to: pb, bounds: CGRect(x: 0, y: 0, width: HEVCEncoder.width, height: HEVCEncoder.height),
-                  colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+                  colorSpace: HEVCEncoder.srgb)
 
         let props: CFDictionary? = key ? [kVTEncodeFrameOptionKey_ForceKeyFrame: kCFBooleanTrue] as CFDictionary : nil
         let st = VTCompressionSessionEncodeFrame(session, imageBuffer: pb, presentationTimeStamp: pts, duration: .invalid,
@@ -162,7 +165,7 @@ final class HEVCEncoder {
         }
         var msg = Data()
         if isKey, let fmt = CMSampleBufferGetFormatDescription(sb), let config = HEVCEncoder.parameterSets(fmt) {
-            HEVCEncoder.append(&msg, type: 1, config)
+            HEVCWire.append(&msg, type: HEVCWire.config, config)
         }
         let n = CMBlockBufferGetDataLength(block)
         var frame = Data(count: n)
@@ -170,7 +173,7 @@ final class HEVCEncoder {
             CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: n, destination: raw.baseAddress!) == kCMBlockBufferNoErr
         }
         guard ok else { return }
-        HEVCEncoder.append(&msg, type: 2, frame)
+        HEVCWire.append(&msg, type: HEVCWire.frame, frame)
         onOutput?(msg, isKey)
     }
 
@@ -180,7 +183,7 @@ final class HEVCEncoder {
                                                                  parameterSetSizeOut: nil, parameterSetCountOut: &count,
                                                                  nalUnitHeaderLengthOut: nil) == noErr, count > 0
         else { return nil }
-        var out = Data([UInt8(count)])
+        var sets: [Data] = []
         for i in 0..<count {
             var ptr: UnsafePointer<UInt8>?
             var size = 0
@@ -188,15 +191,8 @@ final class HEVCEncoder {
                                                                      parameterSetSizeOut: &size, parameterSetCountOut: nil,
                                                                      nalUnitHeaderLengthOut: nil) == noErr, let ptr
             else { return nil }
-            out.append(contentsOf: withUnsafeBytes(of: UInt32(size).bigEndian, Array.init))
-            out.append(ptr, count: size)
+            sets.append(Data(bytes: ptr, count: size))
         }
-        return out
-    }
-
-    private static func append(_ d: inout Data, type: UInt8, _ payload: Data) {
-        d.append(type)
-        d.append(contentsOf: withUnsafeBytes(of: UInt32(payload.count).bigEndian, Array.init))
-        d.append(payload)
+        return HEVCWire.parameterSets(sets)
     }
 }

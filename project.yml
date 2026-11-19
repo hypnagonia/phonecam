@@ -76,6 +76,8 @@ targets:
     sources:
       - path: mac/CameraExtension
         excludes: ["Info.plist", "*.entitlements"]
+    dependencies:
+      - package: PhoneCamCore
     configFiles:
       Debug: Local.xcconfig
       Release: Local.xcconfig

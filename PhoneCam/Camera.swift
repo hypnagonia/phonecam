@@ -113,7 +113,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var tilt = 0.0         // under `lock`: smoothed roll of the phone, radians (0 = level)
     var autoRot = true     // under `lock`: rotation follows how the phone is mounted
     var gravityDeg = 0.0   // under `lock`: angle of gravity in the phone's x-y plane (diagnostics)
-    var rotCandidate = -1, rotStable = 0 // motion queue: a new orientation must hold ~1 s
+    var orientation = OrientationTracker() // motion queue: a new mount must hold ~1 s
     let motion = CMMotionManager()
     var softZoom = 1.15    // crop factor while framing
     var window = CGRect(x: 0, y: 0, width: 1, height: 1) // last crop, sensor-normalized
@@ -309,7 +309,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "mains": mains, "mainsHz": mainsHz,
             "lut": lut, "lutAmt": lutAmt, "looks": Looks.names, "luts": Camera.userLUTs(),
             "presets": Presets.sortedNames(Camera.presets),
-            "realFps": n((measuredFps * 10).rounded() / 10),
+            "realFps": CACurrentMediaTime() - lock.withLock({ lastFrameAt }) > 1.5 ? 0 : n((measuredFps * 10).rounded() / 10),
             "asleep": asleep,
             "interrupted": interrupted ?? "",
             "bitDepth": bitDepth,
@@ -408,8 +408,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // 0.5° is corrected, so the turn and its zoom grow from zero: a hard on/off at 0.5° made the picture
         // jump (turn + 1.6 % zoom) each time sensor noise crossed it.
         let (lv, tl) = lock.withLock { (level, tilt) }
-        let dead = 0.5 * .pi / 180
-        if lv, abs(tl) > dead { img = Camera.leveled(img, angle: -(tl - (tl > 0 ? dead : -dead))) }
+        let turn = Level.correction(tilt: tl)
+        if lv, turn != 0 { img = Camera.leveled(img, angle: turn) }
         let (cube, look) = lock.withLock { (hueCube, lutCube) }
         let e0 = img.extent
         // Grade in gamma-encoded sRGB, like a photo editor, not in CoreImage's linear space.

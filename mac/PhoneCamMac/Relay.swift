@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import QuartzCore
+import PhoneCamCore
 
 /// localhost:4747 → PhoneCam on the iPhone. The camera extension and the browser talk to localhost; only this
 /// app needs Local Network access. Every relayed request gets the shared key (Local.xcconfig → Info.plist),
@@ -32,6 +33,8 @@ final class Relay: ObservableObject {
 
     private let q = DispatchQueue(label: "relay")
     private var listener: NWListener?
+    private var arpIPs: [String] = []      // on q: last ARP read
+    private let arpQ = DispatchQueue(label: "arp", qos: .utility)
     private var listener6: NWListener?
     private var browser: NWBrowser?
     private let pathMonitor = NWPathMonitor()
@@ -402,6 +405,7 @@ final class Relay: ObservableObject {
 
     /// q: every 5 s look for the best route from scratch (the cable may have come back).
     private func probe() {
+        refreshARP() // for the next probe; this one uses the last read
         connectPhone(candidates(withARP: true)) { [weak self] result in
             guard let self else { return }
             if let (c, _) = result { c.cancel(); return }
@@ -420,32 +424,29 @@ final class Relay: ObservableObject {
         return out
     }
 
-    /// The iPhone's USB link-local addresses (169.254.x.x) from the ARP table, plus an optional
-    /// host name set with `defaults write <bundle id> host My-iPhone.local`.
-    /// `-n`: no reverse DNS. Plain `arp -a` can take 5 s per call, and this runs on `q`, which then
-    /// stops serving localhost:4747 (the camera gets nothing). Only link-local entries are taken:
-    /// the router's Wi‑Fi is never used anyway, and names aren't available without DNS.
+    /// q: the iPhone's USB link-local addresses (169.254.x.x) from the last ARP read, plus an optional host
+    /// name set with `defaults write <bundle id> host My-iPhone.local`. The table is read on `arpQ` and
+    /// only the result comes back to `q`: `q` serves localhost:4747 and must never wait for a process.
     private func arpCandidates() -> [String] {
-        var ips: [String] = []
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
-        p.arguments = ["-an"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        if (try? p.run()) != nil {
+        var ips = arpIPs
+        if let host = UserDefaults.standard.string(forKey: "host"), !ips.contains(host) { ips.append(host) }
+        return ips
+    }
+
+    /// Read the ARP table in the background (`arp -an`: no reverse DNS, which took 5 s a call).
+    private func refreshARP() {
+        arpQ.async { [weak self] in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
+            p.arguments = ["-an"]
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return }
             let data = out.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()
-            for line in String(decoding: data, as: UTF8.self).split(separator: "\n")
-            where !line.contains("ff:ff:ff:ff:ff:ff") && !line.contains("incomplete") {
-                if let a = line.firstIndex(of: "("), let b = line.firstIndex(of: ")"), a < b {
-                    let ip = String(line[line.index(after: a)..<b])
-                    if ip.hasPrefix("169.254."), !ip.hasSuffix(".255") { ips.append(ip) }
-                }
-            }
+            let ips = ARP.linkLocal(String(decoding: data, as: UTF8.self))
+            self?.q.async { self?.arpIPs = ips }
         }
-        if let host = UserDefaults.standard.string(forKey: "host") { ips.append(host) }
-        var seen = Set<String>()
-        return ips.filter { seen.insert($0).inserted }
     }
 }

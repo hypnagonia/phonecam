@@ -14,29 +14,13 @@ extension Camera {
         motion.startDeviceMotionUpdates(to: OperationQueue()) { [weak self] m, _ in
             guard let self, let g = m?.gravity, abs(g.z) < 0.9 else { return }
             let phi = atan2(g.y, g.x)
-            let quarter = Double.pi / 2
-            let dev = phi - (phi / quarter).rounded() * quarter // deviation from the nearest 90°
-            let d = min(.pi / 12, max(-.pi / 12, dev))          // leveling: at most ±15°
-            // Orientation: the sensor image is upright when gravity points along -x (phi 180°), so the
-            // picture needs rotating by phi + 180° (rounded to 90°). Switch only when the phone is clearly
-            // in the new position (within 30°) for ~1 s.
+            let d = Level.roll(phi: phi)                      // leveling: at most ±15°
+            let settled = self.orientation.update(phi: phi)   // a new mount only after ~1 s of clear samples
             let phiDeg = phi * 180 / .pi
-            var cand = Int(((phiDeg + 180) / 90).rounded()) * 90 % 360
-            if cand < 0 { cand += 360 }
-            // An unclear sample (between two positions, or a bump) restarts the count. The switch goes to the
-            // candidate that was stable, never to this sample's guess: one bumped sample used to flip the
-            // picture by 90° and the next one flipped it back.
-            if abs(dev) < .pi / 6, cand == self.rotCandidate {
-                self.rotStable += 1
-            } else {
-                self.rotCandidate = abs(dev) < .pi / 6 ? cand : -1
-                self.rotStable = 0
-            }
-            let settled = self.rotStable >= 10 ? self.rotCandidate : -1
             self.lock.withLock {
                 self.tilt += (d - self.tilt) * 0.05 // ~2 s to settle: the horizon doesn't wobble with sensor noise
                 self.gravityDeg = phiDeg
-                if self.autoRot, settled >= 0, self.rotation != settled { self.rotation = settled }
+                if self.autoRot, let r = settled, self.rotation != r { self.rotation = r }
             }
         }
     }
@@ -118,8 +102,7 @@ extension Camera {
     /// Rotate around the centre and zoom just enough that no empty corners show; same size out.
     static func leveled(_ img: CIImage, angle a: Double) -> CIImage {
         let e = img.extent
-        let w = e.width, h = e.height, c = abs(cos(a)), s = abs(sin(a))
-        let zoom = max((w * c + h * s) / w, (w * s + h * c) / h)
+        let zoom = Level.zoom(width: e.width, height: e.height, angle: a)
         let t = CGAffineTransform(translationX: e.midX, y: e.midY)
             .rotated(by: a)
             .scaledBy(x: zoom, y: zoom)
