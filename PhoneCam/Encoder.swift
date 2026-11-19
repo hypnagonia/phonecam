@@ -23,10 +23,7 @@ final class HEVCEncoder {
     private var pool: CVPixelBufferPool?
     private let lock = NSLock()
     private var forceKey = true
-    private var bitrate = 24_000_000   // target from the Quality slider
-    private var current = 24_000_000   // adaptive: lowered when the link can't keep up
-    private var congestion = 0
-    private var lastAdapt = 0.0, cleanSince = 0.0
+    private var rate = BitrateController(target: 24_000_000) // under lock: Quality slider target, adapted to the link
     private var appliedBitrate = 0
     private var broken = false
     private var lastOutput = 0.0, sessionStart = 0.0   // under lock
@@ -38,16 +35,16 @@ final class HEVCEncoder {
     }
 
     /// Bitrate actually used now (bits/s).
-    var currentBitrate: Int { lock.withLock { current } }
+    var currentBitrate: Int { lock.withLock { rate.current } }
 
     /// Server: a viewer was still busy with the previous frame (the link is too slow for this bitrate).
-    func reportCongestion() { lock.withLock { congestion += 1 } }
+    func reportCongestion() { lock.withLock { rate.reportCongestion() } }
 
     init(ci: CIContext) { self.ci = ci }
 
     func requestKeyframe() { lock.withLock { forceKey = true } }
 
-    func setBitrate(_ bps: Int) { lock.withLock { bitrate = bps } }
+    func setBitrate(_ bps: Int) { lock.withLock { rate.target = bps } }
 
     /// The camera's frame rate, for the encoder's rate control (applied to the running session at once).
     func setFrameRate(_ fps: Int) {
@@ -67,20 +64,7 @@ final class HEVCEncoder {
         let (key, bps) = lock.withLock { () -> (Bool, Int) in
             let k = forceKey
             forceKey = false
-            // Once a second: back off 30% after any congestion, creep up 15% after 4 s without it.
-            let now = CACurrentMediaTime()
-            if now - lastAdapt >= 1 {
-                lastAdapt = now
-                if congestion > 0 {
-                    current = max(2_000_000, Int(Double(current) * 0.7))
-                    cleanSince = now
-                } else if now - cleanSince > 4 {
-                    current = Int(Double(current) * 1.15)
-                }
-                congestion = 0
-            }
-            current = min(current, bitrate)
-            return (k, current)
+            return (k, rate.tick(now: CACurrentMediaTime())) // once a second: -30% on congestion, +15% when clean
         }
         if bps != appliedBitrate { applyBitrate(session, bps) }
 

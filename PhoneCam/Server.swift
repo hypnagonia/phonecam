@@ -153,7 +153,7 @@ final class Server {
                 var s = cam.state()
                 s["clients"] = clientCount
                 let c = countLock.withLock { counts }
-                s["viewers"] = "camera \(c.hevc) · preview \(c.preview) · full JPEG \(c.jpeg)"
+                s["viewers"] = "camera \(c.hevc + udp.subscriberCount) · preview \(c.preview) · full JPEG \(c.jpeg)"
                 s["mbps"] = (Double(cam.encoder.currentBitrate) / 100_000).rounded() / 10
                 return s
             }

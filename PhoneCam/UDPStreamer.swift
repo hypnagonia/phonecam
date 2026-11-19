@@ -32,6 +32,7 @@ final class UDPStreamer {
     private let key: String
 
     var hasSubscribers: Bool { countLock.withLock { count > 0 } }
+    var subscriberCount: Int { countLock.withLock { count } }
 
     init(key: String) { self.key = key }
 

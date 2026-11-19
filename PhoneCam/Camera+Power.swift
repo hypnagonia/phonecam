@@ -2,6 +2,7 @@ import AVFoundation
 import CoreImage
 import QuartzCore
 import CoreMotion
+import PhoneCamCore
 
 /// Sleep when nobody watches, and the heat limit.
 extension Camera {
@@ -24,8 +25,10 @@ extension Camera {
                     self.session.startRunning()
                     self.restoreZoom()           // startRunning resets the zoom factor
                     self.encoder.requestKeyframe()
-                } else if self.interrupted == nil, now - self.lock.withLock({ self.lastFrameAt }) > 3,
-                          now - self.restartAt > 5 {
+                } else if CameraWatchdog.shouldRestart(now: now, watched: true, asleep: false,
+                                                       interrupted: self.interrupted != nil,
+                                                       lastFrame: self.lock.withLock({ self.lastFrameAt }),
+                                                       lastStart: self.restartAt) {
                     self.restartSession()        // watched, running, yet no frames: a stop iOS didn't report
                 }
             } else if !self.asleep, self.sleepSoon || now - self.lastViewer > Camera.sleepAfter {

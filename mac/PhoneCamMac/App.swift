@@ -79,6 +79,8 @@ struct MenuView: View {
         .padding(14)
         .frame(width: 300)
         .onAppear { relay.refreshPresets() }
+        // A window-style menu may stay alive between openings: refresh every time it opens.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in relay.refreshPresets() }
     }
 }
 

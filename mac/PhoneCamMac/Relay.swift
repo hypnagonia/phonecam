@@ -113,10 +113,10 @@ final class Relay: ObservableObject {
             t.resume()
             self.maintenance = t
         }
-        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            self?.q.async { self?.probe() }
-            self?.refreshPresets()
-        }
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.q.async { self?.probe() } }
+        // Presets and the camera's state for the menu: read when the menu opens (MenuView.onAppear), and once
+        // a minute for the stop reason; every 5 s woke the phone's network for a menu nobody had open.
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshPresets() }
     }
 
     // MARK: listening on localhost
@@ -163,9 +163,11 @@ final class Relay: ObservableObject {
         client.start(queue: q)
         readHead(client, Data()) { [weak self] head in
             guard let self, let head else { client.cancel(); return }
-            if head.starts(with: Data("GET /hevc".utf8)) { self.serveCamera(client, head: head) }
-            else if head.starts(with: Data("GET /link".utf8)) { self.replyLink(client) }
-            else { self.proxy(client, head: head) }
+            switch RelayHTTP.route(head) {
+            case .camera: self.serveCamera(client, head: head)
+            case .link: self.replyLink(client)
+            case .proxy: self.proxy(client, head: head)
+            }
         }
     }
 
@@ -203,10 +205,7 @@ final class Relay: ObservableObject {
                 self.active -= 1
                 self.publishCount()
             }
-            var out = head
-            if let line = head.range(of: Data("\r\n".utf8)), !Relay.key.isEmpty {
-                out = Data(head[..<line.upperBound]) + Data("X-PhoneCam-Key: \(Relay.key)\r\n".utf8) + head[line.upperBound...]
-            }
+            let out = RelayHTTP.addHeader(head, name: "X-PhoneCam-Key", value: Relay.key)
             phone.send(content: out, completion: .contentProcessed { e in
                 if e != nil { close() } else { self.pipe(from: client, to: phone, close: close) }
             })
