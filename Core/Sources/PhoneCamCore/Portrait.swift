@@ -9,9 +9,9 @@ import Foundation
 /// Skin is handled by the cube's tan (`ColorCube` skinTan), never by these bands. The cube is global (a hue is
 /// changed everywhere), so this works through the colours the clothes and the background don't share.
 public enum Portrait {
-    /// Clean, pleasant hues clothes are turned toward (sRGB HSV degrees). 28° is warm brown / camel: without it
-    /// brown and olive clothes (~34°) went toward 48° and looked swampy green. Skin itself never gets this turn.
-    public static let anchors: [Double] = [355, 28, 48, 140, 178, 212, 262, 322]
+    /// Clean, pleasant hues clothes are turned toward (sRGB HSV degrees). 48° is golden / olive: an olive sweater
+    /// the camera sees warmer (~34°) goes back toward its own colour. No orange anchor: that is skin's hue.
+    public static let anchors: [Double] = [355, 48, 140, 178, 212, 262, 322]
     /// Largest hue turn for clothes.
     public static let maxTurn = 12.0
 

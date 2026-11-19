@@ -92,14 +92,15 @@ final class PortraitTests: XCTestCase {
         XCTAssertLessThan(s.clothes.reduce(0, +), 0.05)
     }
 
-    /// The real case: an olive-brown sweater (hue ~34°) under a face at ~13°: it is clothes, and gets richer.
-    func testBrownSweaterIsClothes() {
+    /// The real case: an olive sweater the camera sees at ~34° under a face at ~13°: it is clothes, gets richer,
+    /// and goes back toward olive.
+    func testOliveSweaterIsClothes() {
         let sweater = ColorCube.withHue(SIMD3(0.42, 0.34, 0.24), 34)
         let s = Portrait.analyze(rgba: frame(shirt: sweater), width: w, height: h, window: window, face: face, skinHue: 13)
         XCTAssertGreaterThan(s.clothes[1] + s.clothes[2], 0.5)
         let t = Portrait.target(s, strength: 1)
         XCTAssertGreaterThan(t.sat[1], 0.05)
-        XCTAssertLessThan(t.hue[1], 0, "toward warm brown 28°, not toward olive")
+        XCTAssertGreaterThan(t.hue[1], 0, "toward olive / golden 48°")
     }
 
     func testNoPersonOnlyAccentAndCalm() {
@@ -120,7 +121,7 @@ final class PortraitTests: XCTestCase {
         XCTAssertEqual(Portrait.turnToClean(205), 7, accuracy: 1e-9)
         XCTAssertEqual(Portrait.turnToClean(190), -12, accuracy: 1e-9)   // nearer to 178: down, capped
         XCTAssertEqual(Portrait.turnToClean(350), 5, accuracy: 1e-9)     // across 0°/360°
-        XCTAssertEqual(Portrait.turnToClean(34), -6, accuracy: 1e-9)     // brown/olive → camel, not olive
+        XCTAssertEqual(Portrait.turnToClean(34), 12, accuracy: 1e-9)     // olive seen warm → back toward olive, capped
     }
 }
 
