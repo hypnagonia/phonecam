@@ -92,6 +92,25 @@ enum Page {
     #mark{position:absolute;width:64px;height:64px;margin:-32px 0 0 -32px;pointer-events:none;opacity:0;transition:opacity .8s;
       border:1.5px solid var(--acc);border-radius:6px;box-shadow:0 0 0 1px #0006}
     #info{color:var(--faint);font-size:13px}
+    #zebra{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+    #hist{width:min(100%,960px);height:56px;border-radius:10px;background:var(--card);border:1px solid var(--line)}
+    .presets{display:flex;flex-wrap:wrap;gap:6px}
+    .presets .p{display:flex;border-radius:99px;background:var(--track);border:1px solid var(--line);overflow:hidden}
+    .presets button{border:0;background:transparent;color:var(--fg);font:inherit;font-size:13px;padding:5px 4px 5px 11px;cursor:pointer}
+    .presets button.x{color:var(--faint);padding:5px 9px 5px 5px}
+    .presets button:hover{color:var(--acc)}
+    .hslhead{display:flex;align-items:center;gap:10px;margin-top:12px}
+    .hslhead span{width:82px;color:var(--fg);font-size:13px}
+    #hslAuto[hidden],#hslManual[hidden]{display:none}
+    .bands{display:flex;gap:7px;flex-wrap:wrap}
+    .bands button{position:relative;width:20px;height:20px;border-radius:50%;border:0;padding:0;cursor:pointer;box-shadow:0 0 0 1px #0004 inset}
+    .bands button.on{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--fg)}
+    .bands button.mod::after{content:'';position:absolute;left:50%;bottom:-7px;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--fg)}
+    .presets .p.on{background:var(--acc);border-color:var(--acc)} .presets .p.on button{color:var(--acc-ink);font-weight:600}
+    #looks{margin-bottom:2px}
+    .prow{display:flex;gap:6px;margin-top:8px}
+    .prow input{flex:1;min-width:0;padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--track);color:var(--fg);font:inherit;font-size:13px}
+    .prow button{padding:6px 12px;border-radius:8px;border:0;background:var(--acc);color:var(--acc-ink);font:inherit;font-size:13px;cursor:pointer}
     button.chip{cursor:pointer;font:inherit;font-size:13px}
     #link{color:var(--fg)} #link.warn{color:var(--dim)}
     #heat{color:#ff9f0a} .chip[hidden]{display:none}
@@ -127,18 +146,27 @@ enum Page {
       <div class="brand"><i></i>PhoneCam</div>
       <div class="chip" id="sleep" title="No app uses the camera: the iPhone camera sleeps and wakes in about a second when it is used" hidden>Camera asleep</div>
       <div class="chip" id="heat" title="iPhone temperature (iOS thermal state)" hidden></div>
+      <div class="chip" id="dark" title="Dark room at 60 fps: 30 fps lets the shutter stay open twice as long, with less noise. Back to 60 fps when it is brighter." hidden>Low light: 30 fps</div>
       <div class="chip" id="link" title="How the Mac reaches the iPhone">–</div>
       <button class="chip" id="reset" title="Return every setting to the PhoneCam defaults">Reset</button>
       <button class="chip" id="prev" title="Video preview on this page (the PhoneCam camera works either way)">Preview off</button>
+      <button class="chip" id="zeb" title="Stripes over blown-out highlights in the preview" hidden>Zebra</button>
       <div class="chip live"><i></i>Live</div>
       <div class="chip"><b id="fpsOut">–</b>fps</div>
       <div class="chip"><b id="cl">–</b>viewers</div>
     </header>
     <div id="view">
-      <div id="wrap"><canvas id="v"></canvas><div id="mark"></div></div>
+      <div id="wrap"><canvas id="v"></canvas><canvas id="zebra" hidden></canvas><div id="mark"></div></div>
+      <canvas id="hist" width="640" height="112" title="Brightness histogram of the preview: shadows left, highlights right (red: clipped)" hidden></canvas>
       <div id="info">Preview <b id="pvOut">–</b> fps · Camera stream <b id="mbOut">–</b> Mbit/s (<span id="vwOut">–</span>) · Click the picture to focus and expose at that point · double-click a slider to reset it</div>
     </div>
     <aside>
+      <section class="card">
+        <h3>Presets</h3>
+        <div class="presets" id="presets"></div>
+        <div class="prow"><input id="pname" maxlength="24" placeholder="Name, e.g. Evening"><button id="psave">Save</button></div>
+        <div class="hint">A preset keeps the look and framing: lens, zoom, exposure, white balance and colour (not capture size or frame rate).</div>
+      </section>
       <section class="card">
         <h3>Lens</h3>
         <div class="seg" data-k="lens"><button data-v="ultra">0.5×</button><button data-v="wide">1×</button><button data-v="tele">5×</button><button data-v="front">Front</button></div>
@@ -158,10 +186,11 @@ enum Page {
       <section class="card">
         <h3>Exposure</h3>
         <div class="seg" data-k="exp"><button data-v="auto">Auto</button><button data-v="lock">Lock</button><button data-v="manual">Manual</button></div>
+        <div class="seg" data-k="mains" title="Lamps flicker with the mains power; Lock and Manual keep the shutter in step with it so the picture shows no bands"><button data-v="auto" id="mainsAuto">Lights auto</button><button data-v="50">50 Hz</button><button data-v="60">60 Hz</button></div>
         <div class="row"><label>EV</label><input type="range" id="ev" step="0.1"><output id="evOut"></output></div>
         <div class="row"><label>ISO</label><input type="range" id="iso" min="0" max="1" step="0.001"><output id="isoOut"></output></div>
         <div class="row"><label>Shutter</label><input type="range" id="shutter" min="0" max="1" step="0.001"><output id="shutterOut"></output></div>
-        <div class="hint">EV works in Auto. ISO or shutter switches to Manual.</div>
+        <div class="hint">EV works in Auto. ISO or shutter switches to Manual. Lock and Manual pick shutter speeds that don't show lamp flicker (50 Hz or 60 Hz power).</div>
       </section>
 
       <section class="card">
@@ -173,16 +202,41 @@ enum Page {
       </section>
 
       <section class="card">
+        <h3>Auto operator</h3>
+        <div class="seg" data-k="steady" title="Exposure and white balance stay put while the light is the same, so moving a hand or leaning in doesn't make the picture breathe; they adjust again when the light really changes"><button data-v="1">Steady auto</button><button data-v="0">Off</button></div>
+        <div class="seg" data-k="light" title="A little light on your face and a soft darkening toward the corners, following you"><button data-v="1">Face light</button><button data-v="0">Off</button></div>
+        <div class="row"><label>Light</label><input type="range" id="lightAmt" min="0" max="1" step="0.01"><output id="lightAmtOut"></output></div>
+        <div class="seg" data-k="tone" title="Gentle contrast for a flat picture, brighter mid-tones in a dark room; decided slowly from the last half minute"><button data-v="1">Auto tone</button><button data-v="0">Off</button></div>
+        <div class="hint" id="opInfo"></div>
+      </section>
+
+      <section class="card">
+        <h3>Look <label class="mini" title="Add your own 3D LUT (.cube, made for Rec.709 video, not Log)">Add .cube<input type="file" id="lutFile" accept=".cube" hidden></label></h3>
+        <div class="presets" id="looks"></div>
+        <div class="row"><label>Strength</label><input type="range" id="lutAmt" min="0" max="1" step="0.01"><output id="lutAmtOut"></output></div>
+        <div class="hint" id="lutMsg">A colour look, like a film stock. Most looks are best at 40–80%. Your own LUTs must be for Rec.709 video (a LUT for Log footage makes the picture harsh and over-bright).</div>
+      </section>
+
+      <section class="card">
         <h3>Color <button class="mini" id="colorReset" title="Colour sliders back to the defaults">Reset</button></h3>
         <div class="row"><label>Warmth</label><input type="range" id="warm" min="-1" max="1" step="0.01"><output id="warmOut"></output></div>
         <div class="row"><label>Tint</label><input type="range" id="tint" min="-1" max="1" step="0.01"><output id="tintOut"></output></div>
         <div class="row"><label>Saturation</label><input type="range" id="sat" min="0" max="2" step="0.01"><output id="satOut"></output></div>
         <div class="row"><label>Contrast</label><input type="range" id="con" min="0.5" max="1.5" step="0.01"><output id="conOut"></output></div>
-        <div class="row"><label>Red</label><input type="range" id="red" min="0" max="1.5" step="0.01"><output id="redOut"></output></div>
-        <div class="row"><label>Green</label><input type="range" id="green" min="0" max="1.5" step="0.01"><output id="greenOut"></output></div>
-        <div class="row"><label>Blue</label><input type="range" id="blue" min="0" max="1.5" step="0.01"><output id="blueOut"></output></div>
+        <div class="seg" data-k="accents" style="margin-top:12px" title="HSL: set each colour yourself, or let PhoneCam do it from the scene"><button data-v="0">HSL manual</button><button data-v="1">HSL auto</button></div>
+        <div id="hslManual">
+          <div class="hslhead"><span id="hslName">Red</span><div class="bands" id="bands"></div></div>
+          <div class="row"><label>Hue</label><input type="range" id="hslH" min="-1" max="1" step="0.01"><output id="hslHOut"></output></div>
+          <div class="row"><label>Saturation</label><input type="range" id="hslS" min="-1" max="1" step="0.01"><output id="hslSOut"></output></div>
+          <div class="row"><label>Luminance</label><input type="range" id="hslL" min="-1" max="1" step="0.01"><output id="hslLOut"></output></div>
+        </div>
+        <div id="hslAuto" hidden>
+          <div class="row"><label>Strength</label><input type="range" id="accentAmt" min="0" max="1" step="0.01"><output id="accentAmtOut"></output></div>
+          <div class="hint" id="accentInfo" style="margin-top:4px"></div>
+          <div class="hint">Small colourful things behind you (a lamp, a light strip, a poster) get a little richer, big loud surfaces a little calmer, skin never changes. Decided slowly from the last half minute, so the picture doesn't jump. Your manual HSL comes back when you switch to manual.</div>
+        </div>
         <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.1" step="0.002"><output id="blackOut"></output></div>
-        <div class="hint">Warmth: bluer ↔ more amber. Tint: greener ↔ more magenta. Red, Green, Blue change saturation of those hues only (Red includes skin and orange).</div>
+        <div class="hint">Warmth: bluer ↔ more amber. Tint: greener ↔ more magenta. HSL manual: hue, saturation and luminance of one colour at a time (pick it in the circles); a dot marks colours you changed. Skin is mostly orange.</div>
       </section>
 
 
@@ -258,9 +312,17 @@ enum Page {
       setSlider('skinWarm',st.skinWarm,sgn(st.skinWarm));
       setSlider('warm',st.warm,sgn(st.warm)); setSlider('tint',st.tint,sgn(st.tint));
       $('skinInfo').textContent=st.wb==='skin'?('face '+st.faceHue+'°, shift '+(st.skinShift>0?'+':'')+st.skinShift+'°'):'off';
-      setSlider('red',st.red,Math.round(st.red*100)+'%');
-      setSlider('green',st.green,Math.round(st.green*100)+'%');
-      setSlider('blue',st.blue,Math.round(st.blue*100)+'%');
+      renderHSL();
+      setSlider('lightAmt',st.lightAmt,Math.round(st.lightAmt*100)+'%');
+      $('lightAmt').disabled=st.light!=='1';
+      { const parts=[];
+        if(st.steady==='1') parts.push((st.steadyExp?'exposure held':'exposure adjusting')+', '+(st.steadyWB?'white balance held':'white balance adjusting'));
+        if(st.tone==='1'&&st.toneNow){ const [c,m]=st.toneNow; parts.push((Math.abs(c)<0.01&&Math.abs(m)<0.01)?'tone: fine as it is':'tone: contrast +'+Math.round(c*100)+', mid-tones '+(m>=0?'+':'')+Math.round(m*100)) }
+        $('opInfo').textContent=parts.length?'Now: '+parts.join(' · '):''; }
+      setSlider('accentAmt',st.accentAmt,Math.round(st.accentAmt*100)+'%');
+      $('hslManual').hidden=st.accents==='1'; $('hslAuto').hidden=st.accents!=='1';
+      { const a=(st.accentSat||[]).map((v,i)=>[HSLN[i],v]).filter(x=>Math.abs(x[1])>=0.02);
+        $('accentInfo').textContent=a.length?'Now: '+a.map(([n,v])=>n+' saturation '+(v>0?'+':'')+Math.round(v*100)).join(', '):'Now: nothing to change (watching the scene)'; }
       setSlider('con',st.con,Math.round(st.con*100)+'%');
       setSlider('black',st.black,(st.black>0?'+':'')+Math.round(st.black*1000)/10);
       setSlider('q',st.q,Math.round(st.q*100)+'%');
@@ -268,7 +330,14 @@ enum Page {
       $('faceOut').textContent=st.focus==='face'?(st.faceSeen?'● face found':'no face'):'';
       $('sleep').hidden=!st.asleep;
       const heat=$('heat'); heat.hidden=!st.thermal||st.thermal==='ok';
-      heat.textContent={warm:'iPhone warm',hot:'iPhone hot: lower load',critical:'iPhone overheating'}[st.thermal]||'';
+      heat.textContent=st.heatLimited?'iPhone hot: 1080p 30 fps until it cools':({warm:'iPhone warm',hot:'iPhone hot',critical:'iPhone overheating'}[st.thermal]||'');
+      heat.hidden=heat.hidden&&!st.heatLimited;
+      $('dark').hidden=!st.darkLimited;
+      $('mainsAuto').textContent='Lights auto ('+st.mainsHz+' Hz)';
+      renderPresets(st.presets||[]);
+      renderLooks();
+      setSlider('lutAmt',st.lutAmt,Math.round(st.lutAmt*100)+'%');
+      $('lutAmt').disabled=!st.lut;
       $('fpsOut').textContent=st.realFps; $('cl').textContent=st.clients; $('mbOut').textContent=st.mbps; $('vwOut').textContent=st.viewers;
     }
 
@@ -283,10 +352,10 @@ enum Page {
       zoom:v=>({zoom:v}), lensPos:v=>({lensPos:v}), ev:v=>({ev:v}),
       iso:v=>({iso:fromLog(v,st.isoMin,st.isoMax)}),
       shutter:v=>({shutter:fromLog(v,st.shutterMin,st.shutterMax)}),
-      temp:v=>({temp:v}), q:v=>({q:v}),
-      sat:v=>({sat:v}), red:v=>({red:v}), green:v=>({green:v}), blue:v=>({blue:v}), skinWarm:v=>({skinWarm:v}), warm:v=>({warm:v}), tint:v=>({tint:v}), con:v=>({con:v}), black:v=>({black:v}),
+      temp:v=>({temp:v}), q:v=>({q:v}), lutAmt:v=>({lutAmt:v}),
+      sat:v=>({sat:v}), hslH:v=>hslSet(0,v), hslS:v=>hslSet(1,v), hslL:v=>hslSet(2,v), accentAmt:v=>({accentAmt:v}), lightAmt:v=>({lightAmt:v}), skinWarm:v=>({skinWarm:v}), warm:v=>({warm:v}), tint:v=>({tint:v}), con:v=>({con:v}), black:v=>({black:v}),
     };
-    const defaults={red:1,green:1,skinWarm:0,warm:0,tint:0,blue:1,sat:1,con:1,black:0,zoom:1.15,ev:0};
+    const defaults={lutAmt:0.7,accentAmt:0.6,lightAmt:0.5,hslH:0,hslS:0,hslL:0,skinWarm:0,warm:0,tint:0,sat:1,con:1,black:0,zoom:1.15,ev:0};
     for(const [id,fn] of Object.entries(sliders)){
       const el=$(id);
       el.addEventListener('pointerdown',()=>busy.add(id));
@@ -297,7 +366,113 @@ enum Page {
     }
 
     const v=$('v'), mark=$('mark');
-    $('colorReset').onclick=()=>send({warm:0,tint:0,sat:1,con:1,red:1,green:1,blue:1,black:0});
+    $('colorReset').onclick=()=>send({warm:0,tint:0,sat:1,con:1,hsl:'',black:0});
+    // HSL: eight colours, one edited at a time. The whole set goes to the phone as one "hsl" value.
+    const HSLN=['Red','Orange','Yellow','Green','Aqua','Blue','Purple','Magenta'];
+    const HSLC=['#e5484d','#f76b15','#ffc53d','#46a758','#12a594','#3e63dd','#8e4ec6','#d6409f'];
+    let hslBand=0; try{ hslBand=Math.min(7,Math.max(0,+localStorage.getItem('hslBand')||0)) }catch(e){}
+    function hslParse(s){
+      const a=[...Array(8)].map(()=>[0,0,0]);
+      (s||'').split(';').forEach((g,i)=>{ const v=g.split(',').map(Number); if(i<8&&v.length===3) a[i]=v.map(x=>isFinite(x)?x:0) });
+      return a;
+    }
+    const hslString=a=>a.map(v=>v.map(x=>Math.round(x*100)/100).join(',')).join(';');
+    function hslSet(k,v){ const a=hslParse(st.hsl); a[hslBand][k]=v; st.hsl=hslString(a); return {hsl:st.hsl} }
+    const bands=$('bands');
+    HSLN.forEach((n,i)=>{
+      const b=document.createElement('button'); b.style.background=HSLC[i]; b.title=n;
+      b.onclick=()=>{ hslBand=i; try{localStorage.setItem('hslBand',i)}catch(e){}; renderHSL() };
+      bands.append(b);
+    });
+    function renderHSL(){
+      const a=hslParse(st.hsl), v=a[hslBand], sgn=x=>(x>0?'+':'')+Math.round(x*100);
+      $('hslName').textContent=HSLN[hslBand];
+      [...bands.children].forEach((b,i)=>{ b.classList.toggle('on',i===hslBand); b.classList.toggle('mod',a[i].some(x=>Math.abs(x)>0.005)) });
+      setSlider('hslH',v[0],sgn(v[0])); setSlider('hslS',v[1],sgn(v[1])); setSlider('hslL',v[2],sgn(v[2]));
+    }
+    // Looks: built-in ones, then the user's (with ×), rebuilt only when the list or the choice changes.
+    let lookKey='';
+    function renderLooks(){
+      const key=JSON.stringify([st.looks,st.luts,st.lut]); if(key===lookKey) return; lookKey=key;
+      const box=$('looks'); box.textContent='';
+      const add=(name,label,mine)=>{
+        const w=document.createElement('span'); w.className='p'+(st.lut===name?' on':'');
+        const b=document.createElement('button'); b.textContent=label; b.onclick=()=>send({lut:name});
+        if(!mine) b.style.paddingRight='11px';
+        w.append(b);
+        if(mine){
+          const x=document.createElement('button'); x.className='x'; x.textContent='×'; x.title='Delete '+name;
+          x.onclick=()=>{ if(confirm('Delete LUT '+name+'?')) send({lutDelete:name}) };
+          w.append(x);
+        }
+        box.append(w);
+      };
+      add('','None',false);
+      for(const n of st.looks||[]) add(n,n,false);
+      for(const n of st.luts||[]) add(n,n,true);
+    }
+    $('lutFile').onchange=async e=>{
+      const f=e.target.files[0]; e.target.value=''; if(!f) return;
+      const msg=$('lutMsg'), old=msg.textContent;
+      msg.textContent='Loading '+f.name+'…';
+      try{
+        const r=await fetch('/lut?name='+encodeURIComponent(f.name),{method:'POST',body:f});
+        msg.textContent=r.ok?f.name+' added.':await r.text();
+        if(r.ok){ poll(); setTimeout(()=>msg.textContent=old,4000) }
+      }catch(err){ msg.textContent='Upload failed: '+err }
+    };
+    // Presets: buttons rebuilt only when the list changes.
+    let presetList='';
+    function renderPresets(list){
+      const key=JSON.stringify(list); if(key===presetList) return; presetList=key;
+      const box=$('presets'); box.textContent='';
+      if(!list.length){ const e=document.createElement('span'); e.className='hint'; e.style.margin='0'; e.textContent='No presets yet.'; box.append(e); return }
+      for(const n of list){
+        const w=document.createElement('span'); w.className='p';
+        const b=document.createElement('button'); b.textContent=n; b.title='Load '+n; b.onclick=()=>send({presetLoad:n});
+        const x=document.createElement('button'); x.className='x'; x.textContent='×'; x.title='Delete '+n;
+        x.onclick=()=>{ if(confirm('Delete preset '+n+'?')) send({presetDelete:n}) };
+        w.append(b,x); box.append(w);
+      }
+    }
+    const savePreset=()=>{ const n=$('pname').value.trim(); if(!n) return; send({presetSave:n}); $('pname').value='' };
+    $('psave').onclick=savePreset;
+    $('pname').addEventListener('keydown',e=>{ if(e.key==='Enter') savePreset() });
+
+    // Histogram and zebra, computed here from the preview frames (the iPhone does no extra work).
+    let zebraOn=false;
+    try{ zebraOn=localStorage.getItem('zebra')==='1' }catch(e){}
+    const AW=320, AH=180;
+    const work=Object.assign(document.createElement('canvas'),{width:AW,height:AH}).getContext('2d',{willReadFrequently:true});
+    const zc=$('zebra'); zc.width=AW; zc.height=AH;
+    const zg=zc.getContext('2d'), hg=$('hist').getContext('2d');
+    let lastAnalysis=0, phase=0;
+    function analyse(bm){
+      const now=performance.now(); if(now-lastAnalysis<125) return; lastAnalysis=now;
+      work.drawImage(bm,0,0,AW,AH);
+      const px=work.getImageData(0,0,AW,AH).data;
+      const bins=new Uint32Array(64); let clipped=0;
+      const z=zebraOn?zg.createImageData(AW,AH):null; phase=(phase+1)%8;
+      for(let i=0,p=0;i<px.length;i+=4,p++){
+        const y=0.2126*px[i]+0.7152*px[i+1]+0.0722*px[i+2];
+        bins[Math.min(63,y>>2)]++;
+        if(y>=245){ clipped++;
+          if(z){ const x=p%AW, yy=(p/AW)|0; const on=((x+yy+phase)&7)<4;
+            z.data[i]=on?0:255; z.data[i+1]=on?0:255; z.data[i+2]=on?0:255; z.data[i+3]=170 } }
+      }
+      if(z) zg.putImageData(z,0,0);
+      // Histogram: square-root height so small peaks stay visible.
+      const W=hg.canvas.width, H=hg.canvas.height, css=getComputedStyle(document.documentElement);
+      hg.clearRect(0,0,W,H);
+      const max=Math.max(...bins), bw=W/64;
+      for(let b=0;b<64;b++){
+        const h=Math.sqrt(bins[b]/max)*(H-8);
+        hg.fillStyle=b===63&&clipped/(AW*AH)>0.01?css.getPropertyValue('--live'):css.getPropertyValue('--dim');
+        hg.fillRect(b*bw+1,H-4-h,bw-2,h);
+      }
+    }
+    window.onPreviewFrame=analyse;
+
     $('reset').onclick=()=>{ if(confirm('Reset all settings to the defaults?')) send({reset:1}) };
 
     // Preview is off by default: apps use the PhoneCam camera, the page only needs the settings.
@@ -307,7 +482,13 @@ enum Page {
     prev.classList.toggle('on',previewOn);
     prev.textContent=previewOn?'Preview on':'Preview off';
     prev.onclick=()=>{ try{ localStorage.setItem('preview',previewOn?'0':'1') }catch(e){} location.reload() };
-    if(previewOn){ v.dataset.preview='1'; play(v); }
+    if(previewOn){
+      v.dataset.preview='1'; play(v);
+      $('hist').hidden=false;
+      const zb=$('zeb'); zb.hidden=false; zb.classList.toggle('on',zebraOn); zc.hidden=!zebraOn;
+      zb.onclick=()=>{ zebraOn=!zebraOn; try{ localStorage.setItem('zebra',zebraOn?'1':'0') }catch(e){}
+        zb.classList.toggle('on',zebraOn); zc.hidden=!zebraOn; zg.clearRect(0,0,AW,AH) };
+    }
     else { $('wrap').classList.add('off'); v.style.display='none'; $('wrap').insertAdjacentHTML('beforeend','<span>Preview is off. The PhoneCam camera works in your apps; turn the preview on above to click-to-focus here.</span>') }
 
     // Reads the MJPEG stream with fetch: no copying of the whole buffer per chunk, JPEG decoded
@@ -321,7 +502,7 @@ enum Page {
         decoding=true;
         createImageBitmap(blob).then(bm=>{
           if(cv.width!==bm.width||cv.height!==bm.height){ cv.width=bm.width; cv.height=bm.height }
-          g.drawImage(bm,0,0); bm.close(); shown++;
+          g.drawImage(bm,0,0); if(window.onPreviewFrame) window.onPreviewFrame(bm); bm.close(); shown++;
         }).catch(()=>{}).finally(()=>{
           decoding=false;
           if(pending){ const b=pending; pending=null; show(b) }

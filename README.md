@@ -19,14 +19,27 @@ browser.
 - **Focus stays on your face**, not on the microphone in front of you. Or click anywhere on the preview to focus there.
 - **No blown-out background.** Auto exposure keeps your face bright and pulls back when a white wall or window
   starts to clip. Or lock it once it's right, so the picture doesn't pump when you move.
+- **An auto operator.** Steady auto keeps exposure and white balance still while the light is the same (no breathing
+  when you move a hand), face light puts a little light on you with a soft vignette, auto tone tidies up flat or dark
+  pictures. All slow and gentle, all nearly free for the phone.
 - **Natural skin under coloured lights.** In Skin white balance, with a blue light behind you and a warm lamp in
   front, your face still looks like a face, and the background keeps its colour.
 - **You stay in the middle of the frame.** The picture gently follows you, like a camera operator would, without
   jitter.
 - **Always upright and level.** Mount the phone any way you like (landscape, upside down, upright); the picture turns
   itself and straightens a slightly crooked horizon.
-- **Rich but natural colour.** Saturation, contrast and per-colour controls (tame a loud blue wall, keep skin as it is).
+- **Rich but natural colour.** Saturation, contrast and HSL per colour, like in a photo editor (tame a loud blue wall,
+  keep skin as it is).
+- **HSL auto.** Instead of setting each colour yourself: small colourful things behind you (a lamp, an LED strip, a
+  poster) get a little richer, loud big surfaces a little calmer, skin never changes. Decided slowly from the last half
+  minute, so the look never jumps.
 - **Smooth and sharp.** Shot in 4K and 10-bit, sent as 1080p at 30 fps with hardware video compression.
+- **No flicker bands.** With exposure locked, the shutter keeps in step with your lamps (50 or 60 Hz power).
+- **Looks after the iPhone.** When it gets hot, capture drops to 1080p 30 fps until it cools; in a dark room
+  60 fps drops to 30 fps for a cleaner picture; the iPhone screen goes dark while you're on camera.
+- **Looks and LUTs.** Built-in looks (Film, Warm, Matte, Teal & Orange, Mono) with a strength slider, or
+  load your own `.cube` LUT made for Rec.709 video.
+- **Presets.** Save your look (say, "Day" and "Evening") and switch from the control page or the Mac menu bar.
 - **Private.** The phone talks only to your Mac, over the USB cable or a direct Wi‑Fi link between the two devices
   (like AirDrop). It never goes through your router, and nothing else on your network can watch it.
 
@@ -48,9 +61,9 @@ You need an iPhone (iOS 17+), a Mac (macOS 13+) with Xcode, and a free Apple dev
 3. **Install the Mac app**
 
    ```sh
-   xcodebuild -project PhoneCam.xcodeproj -scheme PhoneCamMac -destination 'platform=macOS' \
-     -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
-   ditto build/Build/Products/Debug/PhoneCam.app /Applications/PhoneCam.app
+   xcodebuild -project PhoneCam.xcodeproj -scheme PhoneCamMac -configuration Release -destination 'platform=macOS' \
+     -derivedDataPath build -allowProvisioningUpdates -allowProvisioningDeviceRegistration build
+   ditto build/Build/Products/Release/PhoneCam.app /Applications/PhoneCam.app
    open /Applications/PhoneCam.app
    ```
 
@@ -66,7 +79,7 @@ You need an iPhone (iOS 17+), a Mac (macOS 13+) with Xcode, and a free Apple dev
   automatically, so keep Wi‑Fi on on both devices.
 - **Light matters most.** A soft light in front of your face does more for the picture than any setting.
 - **Keep the app in front on the iPhone.** iOS stops the camera when the app is in the background. The screen stays
-  on; the **Dim screen** button keeps the phone cool.
+  on, and goes dark by itself while the camera is in use (tap it to see it again).
 - **Stop the camera** from the PhoneCam menu bar icon when you don't need it: apps see "no signal" and the iPhone
   camera sleeps.
 - **Start at login:** turn it on in the PhoneCam menu bar icon so everything is ready after a restart.
@@ -78,14 +91,18 @@ Open `http://localhost:4747` on the Mac.
 
 | Section | What it does |
 |---|---|
+| **Presets** | Save the current look under a name, load or delete it (also in the Mac menu bar) |
 | **Lens** | Ultra-wide, wide, tele or front camera; auto-frame on or off; how tight the framing is; horizon levelling |
 | **Focus** | Follow your face, auto, or lock; manual distance |
-| **Exposure** | Auto (default), Lock or Manual (ISO and shutter) |
+| **Exposure** | Auto (default), Lock or Manual (ISO and shutter); lights 50 / 60 Hz (picked from your region) |
 | **White balance** | Auto (default), Skin or Lock; how warm the skin should look |
-| **Color** | Warmth and tint, saturation, contrast, black level, and separate strength for reds, greens and blues; Reset |
+| **Auto operator** | Steady auto (exposure and white balance), face light with strength, auto tone |
+| **Look** | None or a built-in look, your own `.cube` LUTs (Add .cube), strength |
+| **Color** | Warmth and tint, saturation, contrast, black level, and HSL: hue, saturation and luminance for each of eight colours, set by hand or automatically from the scene (HSL auto); Reset |
 | **Video** | 4K or 1080p capture (1080p keeps the iPhone cooler), 30 or 60 fps, quality, rotation |
 
-The preview on the page is off by default, since your apps already show the picture. Turn it on to click-to-focus.
+The preview on the page is off by default, since your apps already show the picture. Turn it on to click-to-focus,
+see a brightness histogram under it, and turn on **Zebra** to stripe the parts that are blown out.
 
 ---
 
@@ -107,12 +124,14 @@ updating.
 
 | File | Role |
 |---|---|
-| `PhoneCam/Camera.swift` | Capture and camera controls, face and body tracking, skin hue correction, auto-frame, orientation and levelling, colour grading, dithering |
+| `PhoneCam/Camera.swift` | Capture, lens and format, the frame pipeline (crop, level, colour grading, dithering), state |
+| `PhoneCam/Camera+*.swift` | Settings and presets, exposure (highlight guard, flicker), colour (skin hue), framing (face tracking, auto-frame, levelling), power (sleep, heat, low light) |
 | `PhoneCam/Encoder.swift` | Hardware HEVC encoder: real time, keyframes on demand, adaptive bitrate |
 | `PhoneCam/UDPStreamer.swift` | Video over UDP: paced packets, keyframe and loss requests from the Mac |
 | `PhoneCam/Server.swift` | HTTP server: key check, Bonjour, control API, preview and fallback streams |
 | `PhoneCam/Page.swift` | The control page |
 | `mac/PhoneCamMac/` | Menu bar app: finds the phone (cable or direct Wi‑Fi only), receives UDP video, relays requests with the key, installs the camera extension |
+| `Core/` | Shared pure logic with unit tests: UDP packet format and frame reassembly, picture geometry, presets, flicker-free shutters, HSL and the colour cube, auto accents, the auto operator (steady auto, face light, auto tone), .cube LUT reader and the built-in looks |
 | `mac/CameraExtension/` | CoreMediaIO camera extension: hardware HEVC decoding, "no signal" card |
 | `scripts/hooks/pre-push` | Blocks pushes that would publish private data (`git config core.hooksPath scripts/hooks`) |
 
@@ -125,6 +144,14 @@ updating.
 | `/hevc` | Camera stream (used by the camera extension) |
 | `/video?preview=1` | Light 640×360 MJPEG preview; without `preview`, full 1080p for an OBS Browser Source |
 | `/obs` | Full-size video page |
+
+### Tests
+
+```sh
+swift test --package-path Core
+```
+
+GitHub Actions runs the tests and builds both apps (unsigned) on every push.
 
 ### Notes
 

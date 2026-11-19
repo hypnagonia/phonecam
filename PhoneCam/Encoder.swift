@@ -48,6 +48,13 @@ final class HEVCEncoder {
 
     func setBitrate(_ bps: Int) { lock.withLock { bitrate = bps } }
 
+    /// The camera's frame rate, for the encoder's rate control (applied to the running session at once).
+    func setFrameRate(_ fps: Int) {
+        lock.withLock { frameRate = fps }
+        if let s = session { VTSessionSetProperty(s, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber) }
+    }
+    private var frameRate = 30
+
     /// videoQueue: render the finished picture (origin 0,0, 1920×1080) and encode it. Returns the rendered
     /// frame, so the JPEG preview can reuse it instead of rendering the whole picture a second time.
     @discardableResult
@@ -74,8 +81,11 @@ final class HEVCEncoder {
         }
         if bps != appliedBitrate { applyBitrate(session, bps) }
 
+        // The session's own pool hands out buffers in the layout the hardware encoder reads directly, so the
+        // picture is rendered straight into encoder memory with no conversion copy; ours is only a fallback.
         var out: CVPixelBuffer?
-        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &out) == kCVReturnSuccess, let pb = out else { return nil }
+        let src = VTCompressionSessionGetPixelBufferPool(session) ?? pool
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, src, &out) == kCVReturnSuccess, let pb = out else { return nil }
         CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
@@ -122,9 +132,12 @@ final class HEVCEncoder {
         VTSessionSetProperty(s, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(s, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTSessionSetProperty(s, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_HEVC_Main_AutoLevel)
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 30 as CFNumber)
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 60 as CFNumber)
-        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 2 as CFNumber)
+        let fps = lock.withLock { frameRate }
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
+        // A keyframe every 5 s: keyframes are the biggest frames, and the Mac asks for one at once whenever
+        // it loses a packet or a new viewer starts, so a short interval only costs bitrate and smoothness.
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps * 5 as CFNumber)
+        VTSessionSetProperty(s, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 5 as CFNumber)
         VTCompressionSessionPrepareToEncodeFrames(s)
         session = s
         appliedBitrate = 0

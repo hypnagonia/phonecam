@@ -1,19 +1,18 @@
 import Foundation
 import Network
 import QuartzCore
+import PhoneCamCore
 
 /// The camera stream over UDP: a lost packet costs a frame or two (the Mac skips to the next keyframe)
 /// instead of stalling everything behind it like TCP does on Wi‑Fi.
 ///
 /// The Mac subscribes by sending "HELLO <key>" to UDP port 4747 every second (from the same socket it reads
 /// on); without a hello for 3 s the subscriber is dropped. It may also send "KEY" (lost a frame: send a
-/// keyframe) and "LOSS" (the link is dropping packets: lower the bitrate).
+/// keyframe and nothing until it), "IDR" (a keyframe please, keep the stream going) and "LOSS" (the link is
+/// dropping packets: lower the bitrate).
 ///
-/// Each HEVC message (see HEVCEncoder) is cut into datagrams:
-///   [u8 0x50 'P'][u8 flags: 1 = keyframe][u32 BE frame number][u16 BE index][u16 BE count] + ≤ 1200 bytes
+/// Each HEVC message (see HEVCEncoder) is cut into datagrams by `UDPPacket` (PhoneCamCore).
 final class UDPStreamer {
-    static let chunk = 1200
-
     var onKeyRequest: (() -> Void)?
     var onLoss: (() -> Void)?
 
@@ -81,7 +80,12 @@ final class UDPStreamer {
             updateCount()
             onKeyRequest?() // the new viewer can start right away
         } else if text == "KEY", let s = subs[id] {
+            // The Mac lost data: it can only go on from a keyframe, so skip to the next one.
             s.needKey = true
+            onKeyRequest?()
+        } else if text == "IDR", subs[id] != nil {
+            // The Mac has a new or lagging viewer of its own: make a keyframe soon, but keep sending every
+            // frame (skipping here would leave gaps the Mac would take for losses).
             onKeyRequest?()
         } else if text == "LOSS", subs[id] != nil {
             onLoss?()
@@ -113,26 +117,13 @@ final class UDPStreamer {
         q.async {
             guard !self.subs.isEmpty else { return }
             self.frame &+= 1
-            let n = (msg.count + UDPStreamer.chunk - 1) / UDPStreamer.chunk
-            guard n <= Int(UInt16.max) else { return }
-            var packets: [Data] = []
-            packets.reserveCapacity(n)
-            for i in 0..<n {
-                var p = Data(capacity: 10 + UDPStreamer.chunk)
-                p.append(0x50)
-                p.append(isKey ? 1 : 0)
-                p.append(contentsOf: withUnsafeBytes(of: self.frame.bigEndian, Array.init))
-                p.append(contentsOf: withUnsafeBytes(of: UInt16(i).bigEndian, Array.init))
-                p.append(contentsOf: withUnsafeBytes(of: UInt16(n).bigEndian, Array.init))
-                let start = msg.startIndex + i * UDPStreamer.chunk
-                p.append(msg[start..<min(msg.endIndex, start + UDPStreamer.chunk)])
-                packets.append(p)
-            }
             let targets = self.subs.values.filter { s in
                 if s.needKey && !isKey { return false } // a frame can only follow the frames it depends on
                 s.needKey = false
                 return true
             }
+            let packets = UDPPacket.packets(of: msg, frame: self.frame, isKey: isKey)
+            guard !packets.isEmpty else { return }
             // Pace the packets: groups of 16 about 1 ms apart, not one burst that overflows Wi‑Fi buffers.
             let group = 16
             for (g, start) in stride(from: 0, to: packets.count, by: group).enumerated() {

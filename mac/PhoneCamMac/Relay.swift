@@ -19,6 +19,7 @@ final class Relay: ObservableObject {
     @Published var connections = 0
     @Published var cameraTransport = "–"  // how the camera stream arrives: UDP or TCP
     @Published private(set) var paused = false // camera stopped from the menu: apps get "no signal", the iPhone sleeps
+    @Published private(set) var presets: [String] = [] // saved on the iPhone, for the menu
 
     private static let key: String = {
         let k = (Bundle.main.object(forInfoDictionaryKey: "PhoneCamKey") as? String) ?? ""
@@ -76,6 +77,21 @@ final class Relay: ObservableObject {
         if on { URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:\(Relay.port)/set?sleep=1")!).resume() }
     }
 
+    /// Menu: the iPhone's presets (read from /state through this relay).
+    func refreshPresets() {
+        URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:\(Relay.port)/state")!) { [weak self] data, _, _ in
+            guard let data, let st = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let list = st["presets"] as? [String] else { return }
+            DispatchQueue.main.async { if self?.presets != list { self?.presets = list } }
+        }.resume()
+    }
+
+    func loadPreset(_ name: String) {
+        var c = URLComponents(string: "http://127.0.0.1:\(Relay.port)/set")!
+        c.queryItems = [URLQueryItem(name: "presetLoad", value: name)]
+        URLSession.shared.dataTask(with: c.url!).resume()
+    }
+
     func start() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             self?.routerWiFi = path.availableInterfaces.first { $0.type == .wifi && !$0.name.hasPrefix("awdl") }
@@ -89,7 +105,10 @@ final class Relay: ObservableObject {
             t.resume()
             self.maintenance = t
         }
-        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.q.async { self?.probe() } }
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.q.async { self?.probe() }
+            self?.refreshPresets()
+        }
     }
 
     // MARK: listening on localhost
@@ -396,26 +415,30 @@ final class Relay: ObservableObject {
         return out
     }
 
-    /// The iPhone's addresses from the ARP table (USB link-local 169.254.x.x first), plus an optional
+    /// The iPhone's USB link-local addresses (169.254.x.x) from the ARP table, plus an optional
     /// host name set with `defaults write <bundle id> host My-iPhone.local`.
+    /// `-n`: no reverse DNS. Plain `arp -a` can take 5 s per call, and this runs on `q`, which then
+    /// stops serving localhost:4747 (the camera gets nothing). Only link-local entries are taken:
+    /// the router's Wi‑Fi is never used anyway, and names aren't available without DNS.
     private func arpCandidates() -> [String] {
         var ips: [String] = []
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
-        p.arguments = ["-a"]
+        p.arguments = ["-an"]
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         if (try? p.run()) != nil {
+            let data = out.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()
-            let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            for line in text.split(separator: "\n") where line.lowercased().contains("iphone") {
+            for line in String(decoding: data, as: UTF8.self).split(separator: "\n")
+            where !line.contains("ff:ff:ff:ff:ff:ff") && !line.contains("incomplete") {
                 if let a = line.firstIndex(of: "("), let b = line.firstIndex(of: ")"), a < b {
-                    ips.append(String(line[line.index(after: a)..<b]))
+                    let ip = String(line[line.index(after: a)..<b])
+                    if ip.hasPrefix("169.254."), !ip.hasSuffix(".255") { ips.append(ip) }
                 }
             }
         }
-        ips.sort { $0.hasPrefix("169.254.") && !$1.hasPrefix("169.254.") }
         if let host = UserDefaults.standard.string(forKey: "host") { ips.append(host) }
         var seen = Set<String>()
         return ips.filter { seen.insert($0).inserted }

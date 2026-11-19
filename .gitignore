@@ -5,3 +5,5 @@ Local.xcconfig
 __pycache__/
 .private-patterns
 CLAUDE.md
+.build/
+.swiftpm/

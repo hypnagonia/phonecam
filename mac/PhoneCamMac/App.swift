@@ -48,6 +48,12 @@ struct MenuView: View {
 
             Button(relay.paused ? "Start camera" : "Stop camera") { relay.setPaused(!relay.paused) }
                 .help("Stopped: apps see \"no signal\" and the iPhone camera sleeps (cooler, saves battery)")
+            if !relay.presets.isEmpty {
+                Menu("Presets") {
+                    ForEach(relay.presets, id: \.self) { name in Button(name) { relay.loadPreset(name) } }
+                }
+                .fixedSize()
+            }
 
             Divider()
             Text("Camera: \(installer.status)").font(.callout)
@@ -69,6 +75,7 @@ struct MenuView: View {
         }
         .padding(14)
         .frame(width: 300)
+        .onAppear { relay.refreshPresets() }
     }
 }
 

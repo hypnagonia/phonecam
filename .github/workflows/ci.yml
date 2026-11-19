@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests (PhoneCamCore)
+        run: swift test --package-path Core
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          cp Local.xcconfig.example Local.xcconfig
+          xcodegen generate
+
+      - name: Build the iPhone app
+        run: >
+          xcodebuild -project PhoneCam.xcodeproj -scheme PhoneCam -destination 'generic/platform=iOS'
+          -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet build
+
+      - name: Build the Mac app and camera extension
+        run: >
+          xcodebuild -project PhoneCam.xcodeproj -scheme PhoneCamMac -destination 'platform=macOS'
+          -derivedDataPath build CODE_SIGNING_ALLOWED=NO -quiet build

@@ -14,6 +14,7 @@ final class Model: ObservableObject {
     lazy var server = Server(port: 4747, cam: cam)
     @Published var url = "…"
     @Published var status = ""
+    @Published var live = false   // the camera is capturing for a viewer (not asleep)
     private var started = false
 
     func start() {
@@ -27,6 +28,7 @@ final class Model: ObservableObject {
     func refresh() {
         url = "http://\(Model.wifiAddress() ?? "no Wi‑Fi"):\(server.port)"
         status = "clients: \(server.clientCount) · \(Int(cam.measuredFps.rounded())) fps"
+        live = cam.measuredFps > 1
     }
 
     static func wifiAddress() -> String? {
@@ -50,8 +52,14 @@ final class Model: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var m = Model.shared
+    @Environment(\.scenePhase) private var phase
     @State private var dim = false
+    @State private var autoDim = false          // dimmed by us because the camera is live, not by the button
     @State private var savedBrightness: CGFloat = 0.5
+    @State private var lastTouch = Date()
+    /// While the camera is live the screen goes dark after this long without a touch (less heat and battery);
+    /// a tap brings it back for another round.
+    private static let dimAfter: TimeInterval = 10
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -75,16 +83,35 @@ struct ContentView: View {
             .foregroundColor(.white)
             .opacity(dim ? 0.25 : 1)
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            lastTouch = Date()
+            if autoDim { setDim(false) }
+        }
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             m.start()
         }
-        .onReceive(tick) { _ in m.refresh() }
+        .onReceive(tick) { _ in
+            m.refresh()
+            if m.live, !dim, Date().timeIntervalSince(lastTouch) > Self.dimAfter { setDim(true, auto: true) }
+            if !m.live, autoDim { setDim(false) }
+        }
+        .onChange(of: phase) { _, p in
+            if p != .active, dim { setDim(false) } // never leave the phone's screen dark outside the app
+        }
     }
 
     private func toggleDim() {
-        dim.toggle()
-        if dim {
+        lastTouch = Date()
+        setDim(!dim)
+    }
+
+    private func setDim(_ on: Bool, auto: Bool = false) {
+        guard on != dim else { return }
+        dim = on
+        autoDim = on && auto
+        if on {
             savedBrightness = UIScreen.main.brightness
             UIScreen.main.brightness = 0
         } else {

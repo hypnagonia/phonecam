@@ -1,12 +1,17 @@
 name: PhoneCam
 options:
   bundleIdPrefix: com.phonecam
+packages:
+  PhoneCamCore:
+    path: Core
 targets:
   PhoneCam:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
     sources: [PhoneCam]
+    dependencies:
+      - package: PhoneCamCore
     info:
       path: PhoneCam/Info.plist
       properties:
@@ -45,6 +50,7 @@ targets:
       Debug: Local.xcconfig
       Release: Local.xcconfig
     dependencies:
+      - package: PhoneCamCore
       - target: PhoneCamCamera
         embed: true
     settings:
@@ -85,3 +91,23 @@ targets:
         SWIFT_VERSION: "5.0"
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "3"
+
+# Run and archive the optimized build: the Swift code on the hot paths (every UDP packet, every frame's
+# measurements) is several times slower in Debug (Mac app ~14% CPU in Debug, ~1.5% in Release).
+schemes:
+  PhoneCam:
+    build:
+      targets:
+        PhoneCam: all
+    run:
+      config: Release
+    archive:
+      config: Release
+  PhoneCamMac:
+    build:
+      targets:
+        PhoneCamMac: all
+    run:
+      config: Release
+    archive:
+      config: Release
