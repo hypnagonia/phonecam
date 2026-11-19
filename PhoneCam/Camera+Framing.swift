@@ -87,14 +87,33 @@ extension Camera {
         goal.y = min(1 - hh, max(hh, goal.y))
         frameCenter.x = min(1 - hw, max(hw, frameCenter.x)) // zoom or orientation may have changed
         frameCenter.y = min(1 - hh, max(hh, frameCenter.y))
+        // Like a calm camera operator: the aim is smoothed (face detection jitters); the frame stays put for moves
+        // under 12 % of it and for anything you hold for less than 1.2 s (leaning in, a gesture); then it eases
+        // over ~4 s, never faster than 10 % of the frame per second. All in time, not frames (30 or 60 fps alike).
+        let now = CACurrentMediaTime()
+        let dt = framingLast > 0 ? min(0.2, now - framingLast) : 1.0 / 30
+        framingLast = now
+        var aim = framingGoal ?? goal
+        let ka = 1 - exp(-dt / 0.5)
+        aim.x += (goal.x - aim.x) * ka
+        aim.y += (goal.y - aim.y) * ka
+        framingGoal = aim
         let size = max(ws.w, ws.h)
-        let dist = hypot(goal.x - frameCenter.x, goal.y - frameCenter.y)
-        if dist > size * 0.06 { framingMoving = true }   // ignore small moves
-        if dist < size * 0.02 { framingMoving = false }
+        let dist = hypot(aim.x - frameCenter.x, aim.y - frameCenter.y)
+        if dist > size * 0.12 {
+            if framingOutSince == nil { framingOutSince = now }
+            if now - (framingOutSince ?? now) >= 1.2 { framingMoving = true }
+        } else {
+            framingOutSince = nil
+        }
+        if dist < size * 0.03 { framingMoving = false }
         if framingMoving {
-            let k = 0.03 // per frame: ~2 s to settle at 30 fps
-            frameCenter.x += (goal.x - frameCenter.x) * k
-            frameCenter.y += (goal.y - frameCenter.y) * k
+            let k = 1 - exp(-dt / 4.0)
+            var step = CGPoint(x: (aim.x - frameCenter.x) * k, y: (aim.y - frameCenter.y) * k)
+            let len = hypot(step.x, step.y), cap = size * 0.10 * dt
+            if len > cap { step = CGPoint(x: step.x * cap / len, y: step.y * cap / len) }
+            frameCenter.x += step.x
+            frameCenter.y += step.y
         }
         return CGRect(x: frameCenter.x - hw, y: frameCenter.y - hh, width: ws.w, height: ws.h)
     }

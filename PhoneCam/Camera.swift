@@ -133,6 +133,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // Auto-frame smoothing, videoQueue only.
     var frameCenter = CGPoint(x: 0.5, y: 0.5)
     var framingMoving = false
+    var framingGoal: CGPoint?       // the aim, smoothed (face detection jitters)
+    var framingOutSince: Double?    // since when the aim has been outside the dead zone
+    var framingLast = 0.0           // time of the last frame, for frame-rate independent smoothing
 
     var onFrame: ((Data, Bool) -> Void)?          // JPEG for /video: full (OBS Browser Source) or preview
     var wantsJPEG: () -> Bool = { false }
