@@ -94,8 +94,9 @@ struct ContentView: View {
         }
         .onReceive(tick) { _ in
             m.refresh()
-            if m.live, !dim, Date().timeIntervalSince(lastTouch) > Self.dimAfter { setDim(true, auto: true) }
-            if !m.live, autoDim { setDim(false) }
+            // dark after 10 s untouched, live or not: with the camera stopped from the Mac the screen was the
+            // biggest drain left (the app must stay in front, so the phone never locks); a tap brings it back
+            if !dim, Date().timeIntervalSince(lastTouch) > Self.dimAfter { setDim(true, auto: true) }
         }
         .onChange(of: phase) { _, p in
             if p != .active, dim { setDim(false) } // never leave the phone's screen dark outside the app

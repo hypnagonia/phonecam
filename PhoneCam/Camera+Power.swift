@@ -23,6 +23,7 @@ extension Camera {
                     self.asleep = false
                     self.restartAt = now
                     self.session.startRunning()
+                    self.startMotion()
                     self.restoreZoom()           // startRunning resets the zoom factor
                     self.encoder.requestKeyframe()
                 } else if CameraWatchdog.shouldRestart(now: now, watched: true, asleep: false,
@@ -35,6 +36,7 @@ extension Camera {
                 self.sleepSoon = false
                 self.asleep = true
                 self.session.stopRunning()
+                self.motion.stopDeviceMotionUpdates() // levelling and rotation need nothing while asleep
                 self.updateStats { $0.fps = 0 }
             }
         }

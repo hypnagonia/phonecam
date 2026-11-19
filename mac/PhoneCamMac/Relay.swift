@@ -215,7 +215,9 @@ final class Relay: ObservableObject {
 
     /// q: answered here, not by the phone: how the Mac reaches the phone (for the control page).
     private func replyLink(_ c: NWConnection) {
-        let body = "{\"link\":\"\(link)\",\"camera\":\"\(locals.isEmpty ? "–" : transport)\"}"
+        let n = udp.counts
+        let udpJSON = "{\"mode\":\"\(udp.mode)\",\"wakeups\":\(n.wakeups),\"packets\":\(n.packets),\"frames\":\(n.frames),\"keyRequests\":\(n.keyRequests),\"lossReports\":\(n.lossReports)}"
+        let body = "{\"link\":\"\(link)\",\"camera\":\"\(locals.isEmpty ? "–" : transport)\",\"udp\":\(udpJSON)}"
         let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n\(body)"
         c.send(content: Data(resp.utf8), completion: .contentProcessed { _ in c.cancel() })
     }

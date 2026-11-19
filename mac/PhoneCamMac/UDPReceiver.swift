@@ -29,6 +29,11 @@ final class UDPReceiver {
     private var socketPackets = 0              // packets read on the fast socket since it opened
     private var noFastPath = false             // the socket gave nothing once: stay on Network.framework
     private(set) var mode = "–"                // "socket" or "network", for diagnostics
+    /// Totals since launch, for measuring the two receive paths (`/link` shows them): wake-ups of this queue
+    /// to take packets, packets, whole frames handed on, and frames lost (a keyframe or loss report sent).
+    private(set) var counts = (wakeups: 0, packets: 0, frames: 0, keyRequests: 0, lossReports: 0)
+    /// `defaults write <bundle id> udpMode network`: never open the socket (to compare the two paths).
+    private let forceNetwork = UserDefaults.standard.string(forKey: "udpMode") == "network"
 
     init(queue: DispatchQueue, key: String) {
         q = queue
@@ -48,7 +53,7 @@ final class UDPReceiver {
         conn = c
         mode = "network"
         c.stateUpdateHandler = { [weak self] st in
-            guard let self, c === self.conn, case .ready = st, !self.noFastPath, self.fd < 0 else { return }
+            guard let self, c === self.conn, case .ready = st, !self.noFastPath, !self.forceNetwork, self.fd < 0 else { return }
             self.openSocket(like: c, endpoint: endpoint, via: via, avoid: avoid)
         }
         c.start(queue: q)
@@ -163,10 +168,12 @@ final class UDPReceiver {
     private func drain() {
         let now = CACurrentMediaTime()
         var events: [FrameAssembler.Event] = []
+        counts.wakeups += 1
         while fd >= 0 {
             let n = buffer.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
             if n <= 0 { break }
             socketPackets += 1
+            counts.packets += 1
             events += assembler.packet(Data(buffer[0..<n]), now: now)
         }
         handle(events)
@@ -180,7 +187,11 @@ final class UDPReceiver {
     private func receive(_ c: NWConnection) {
         c.receiveMessage { [weak self] data, _, _, err in
             guard let self, c === self.conn else { return }
-            if let data, self.fd < 0 || self.socketPackets == 0 { self.packet(data) }
+            if let data, self.fd < 0 || self.socketPackets == 0 {
+                self.counts.wakeups += 1
+                self.counts.packets += 1
+                self.packet(data)
+            }
             if err == nil { self.receive(c) }
         }
     }
@@ -196,9 +207,9 @@ final class UDPReceiver {
     private func handle(_ events: [FrameAssembler.Event]) {
         for e in events {
             switch e {
-            case let .frame(msg, isKey): onFrame?(msg, isKey)
-            case .requestKey: say("KEY")
-            case .reportLoss: say("LOSS")
+            case let .frame(msg, isKey): counts.frames += 1; onFrame?(msg, isKey)
+            case .requestKey: counts.keyRequests += 1; say("KEY")
+            case .reportLoss: counts.lossReports += 1; say("LOSS")
             }
         }
     }
