@@ -58,12 +58,16 @@ final class Relay: ObservableObject {
         let conn: NWConnection
         let head: Data
         var headerSent = false
-        var busy = false
+        // Frames handed to the connection and not yet taken by the network stack. A viewer is only "lagging"
+        // when this grows (see fanOut), not whenever one send is still under way.
+        var pending = 0
+        var pendingBytes = 0
         var skipUntilKey = true
         let since = CACurrentMediaTime()
         init(_ c: NWConnection, head: Data) { conn = c; self.head = head }
     }
     private var locals: [ObjectIdentifier: Local] = [:] // on q
+    private static let maxPending = 8, maxPendingBytes = 6_000_000
     private var maintenance: DispatchSourceTimer?
 
     /// Menu: stop or start the camera. Stopped, the camera stream is refused (apps show the "no signal"
@@ -278,9 +282,14 @@ final class Relay: ObservableObject {
         var needKey = false
         for (id, l) in locals {
             if l.skipUntilKey && !isKey { continue }
-            if l.busy { l.skipUntilKey = true; needKey = true; continue }
+            // A viewer that really lags (more than a quarter of a second of frames, or 6 MB, queued) is cut
+            // off until the next keyframe. One send still under way is not lagging: a keyframe is 0.5–1 MB and
+            // does not leave within one frame's 33 ms. Dropping the next frame for that asked for another
+            // keyframe, which again did not leave in time: the picture stood still for 6–7 s, whenever the
+            // camera extension was a little late once (every 20–60 s on a busy Mac).
+            if l.pending >= Relay.maxPending || l.pendingBytes > Relay.maxPendingBytes { l.skipUntilKey = true; needKey = true; continue }
             l.skipUntilKey = false
-            l.busy = true
+            l.pending += 1
             var out = msg
             if !l.headerSent {
                 l.headerSent = true
@@ -288,9 +297,12 @@ final class Relay: ObservableObject {
                 transport = "UDP"
                 DispatchQueue.main.async { self.cameraTransport = "UDP" }
             }
+            let size = out.count
+            l.pendingBytes += size
             l.conn.send(content: out, completion: .contentProcessed { [weak self] e in
                 self?.q.async {
-                    l.busy = false
+                    l.pending -= 1
+                    l.pendingBytes -= size
                     if e != nil { self?.dropLocal(id) }
                 }
             })
