@@ -27,8 +27,8 @@ final class Model: ObservableObject {
 
     func refresh() {
         url = "http://\(Model.wifiAddress() ?? "no Wi‑Fi"):\(server.port)"
-        status = "clients: \(server.clientCount) · \(Int(cam.measuredFps.rounded())) fps"
-        live = cam.measuredFps > 1
+        status = "clients: \(server.clientCount) · \(Int(cam.stats.fps.rounded())) fps"
+        live = cam.stats.fps > 1
     }
 
     static func wifiAddress() -> String? {

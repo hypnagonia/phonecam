@@ -130,7 +130,12 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
 
     var frameCount = 0
     var fpsStart = CACurrentMediaTime()
-    var measuredFps = 0.0
+    /// Frame rate and timing diagnostics. Written on videoQueue, read on `queue` (/state) and the main thread
+    /// (the iPhone screen), so only under `lock`: use `stats` / `updateStats`.
+    struct Stats { var fps = 0.0, encMs = 0.0, anaMs = 0.0, pipeMs = 0.0 }
+    private var statsStore = Stats()
+    var stats: Stats { lock.withLock { statsStore } }
+    func updateStats(_ change: (inout Stats) -> Void) { lock.withLock { change(&statsStore) } }
 
     // Sleep: with nobody watching for 30 s the capture stops (no heat, no battery); it starts again within
     // about a second when a viewer appears. Settings can still be changed while asleep.
@@ -142,10 +147,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var restartAt = 0.0              // on `queue`: last start or restart of the session
     var lastFrameAt = 0.0            // under `lock`: time of the last frame from the sensor
     var sleepSoon = false                 // on `queue`: the Mac stopped the camera: sleep as soon as nobody watches
-    var encMs = 0.0   // render + JPEG time per frame (moving average)
-    var anaMs = 0.0   // skin colour and highlight measurements per frame (moving average)
     var previewTick = 0 // videoQueue: the control-page preview gets every other frame
-    var pipeMs = 0.0  // sensor capture → JPEG ready (moving average)
 
     // MARK: start
 
@@ -286,6 +288,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard let d = device else { return ["ok": false] }
         let f = d.activeFormat
         let tt = d.temperatureAndTintValues(for: d.deviceWhiteBalanceGains)
+        let st = stats
         let (rot, q, sat, con, blk) = lock.withLock { (rotation, quality, saturation, contrast, black) }
         func n(_ x: Double) -> Double { x.isFinite ? x : 0 }
         let focus: String
@@ -309,13 +312,13 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "mains": mains, "mainsHz": mainsHz,
             "lut": lut, "lutAmt": lutAmt, "looks": Looks.names, "luts": Camera.userLUTs(),
             "presets": Presets.sortedNames(Camera.presets),
-            "realFps": CACurrentMediaTime() - lock.withLock({ lastFrameAt }) > 1.5 ? 0 : n((measuredFps * 10).rounded() / 10),
+            "realFps": CACurrentMediaTime() - lock.withLock({ lastFrameAt }) > 1.5 ? 0 : n((st.fps * 10).rounded() / 10),
             "asleep": asleep,
             "interrupted": interrupted ?? "",
             "bitDepth": bitDepth,
             "cap": cap,
             "thermal": ["ok", "warm", "hot", "critical"][min(3, ProcessInfo.processInfo.thermalState.rawValue)],
-            "encMs": n((encMs * 10).rounded() / 10), "anaMs": n((anaMs * 100).rounded() / 100), "pipeMs": n((pipeMs * 10).rounded() / 10),
+            "encMs": n((st.encMs * 10).rounded() / 10), "anaMs": n((st.anaMs * 100).rounded() / 100), "pipeMs": n((st.pipeMs * 10).rounded() / 10),
             "rot": lock.withLock { autoRot } ? "auto" : "\(rot)",
             "rotNow": rot,
             "gravity": n((lock.withLock { gravityDeg } * 10).rounded() / 10),
@@ -358,7 +361,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let now = CACurrentMediaTime()
         lock.withLock { lastFrameAt = now }
         if now - fpsStart >= 1 {
-            measuredFps = Double(frameCount) / (now - fpsStart)
+            let fps = Double(frameCount) / (now - fpsStart)
+            updateStats { $0.fps = fps }
             frameCount = 0
             fpsStart = now
         }
@@ -368,7 +372,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guardHighlights(pb)
         analyzeAccents(pb)
         analyzeTone(pb)
-        anaMs = anaMs * 0.95 + (CACurrentMediaTime() - a0) * 1000 * 0.05
+        let ana = (CACurrentMediaTime() - a0) * 1000
+        updateStats { $0.anaMs = $0.anaMs * 0.95 + ana * 0.05 }
         let wantJ = wantsJPEG(), wantH = wantsHEVC(), wantP = wantsPreview()
         guard wantJ || wantH || wantP else { return }
         let (rot, q, sat, con, blk) = lock.withLock { (rotation, quality, saturation, contrast, black) }
@@ -467,10 +472,14 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             onFrame?(data, true) // control-page preview: 640×360, light enough not to crowd the camera's Wi‑Fi
         }
         let t1 = CACurrentMediaTime()
-        encMs = encMs * 0.9 + (t1 - t0) * 1000 * 0.1
+        let enc = (t1 - t0) * 1000
+        updateStats { $0.encMs = $0.encMs * 0.9 + enc * 0.1 }
         let captured = CMSampleBufferGetPresentationTimeStamp(sb).seconds
         let hostNow = CMClockGetTime(CMClockGetHostTimeClock()).seconds
-        if captured.isFinite, hostNow > captured { pipeMs = pipeMs * 0.9 + (hostNow - captured) * 1000 * 0.1 }
+        if captured.isFinite, hostNow > captured {
+            let pipe = (hostNow - captured) * 1000
+            updateStats { $0.pipeMs = $0.pipeMs * 0.9 + pipe * 0.1 }
+        }
     }
 
     let srgb = CGColorSpace(name: CGColorSpace.sRGB)!

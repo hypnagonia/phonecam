@@ -35,7 +35,7 @@ extension Camera {
                 self.sleepSoon = false
                 self.asleep = true
                 self.session.stopRunning()
-                self.measuredFps = 0
+                self.updateStats { $0.fps = 0 }
             }
         }
         t.resume()
