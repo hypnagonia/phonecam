@@ -88,6 +88,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var hsl = HSL()        // under `lock`: hue, saturation and luminance per colour
     // Auto accents (see Accents in PhoneCamCore): small colourful things in the background get richer.
     var accentsOn = false          // under `lock`
+    var portraitOn = false         // under `lock`: HSL auto 2 (accents is on too): clothes, accent, calm room, tan
+    var autoHue = [Double](repeating: 0, count: 8) // under `lock`: HSL auto 2's hue turns now
+    var portraitHue = Accents.Tracker(), portraitSat = Accents.Tracker() // videoQueue
     var accentAmt = 0.6            // under `lock`: strength 0…1
     var autoSat = [Double](repeating: 0, count: 8) // under `lock`: the saturation the auto accents add now
     var accentTracker = Accents.Tracker() // videoQueue
@@ -323,7 +326,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "rotNow": rot,
             "gravity": n((lock.withLock { gravityDeg } * 10).rounded() / 10),
             "q": q, "sat": sat, "con": con, "black": blk, "hsl": lock.withLock { hsl.string },
-            "accents": lock.withLock { accentsOn } ? "1" : "0", "accentAmt": lock.withLock { accentAmt },
+            "accents": lock.withLock { accentsOn ? (portraitOn ? "2" : "1") : "0" }, "accentAmt": lock.withLock { accentAmt },
+            "accentHue": lock.withLock { autoHue.map { ($0 * 100).rounded() / 100 } },
             "accentSat": lock.withLock { autoSat.map { ($0 * 100).rounded() / 100 } },
             "skinWarm": skinWarm, "warm": lock.withLock { warm }, "tint": lock.withLock { tint },
             "faceHue": n(((faceHueDeg ?? 0) * 10).rounded() / 10), "skinShift": n((skinShift * 10).rounded() / 10),

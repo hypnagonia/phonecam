@@ -65,12 +65,15 @@ public enum AutoOperator {
     public struct Tone: Equatable {
         public var contrast = 0.0   // 0…0.15: S-curve strength
         public var mids = 0.0       // -0.1…0.15: + brighter mid-tones
+        public var black = 0.0      // 0…0.06: milky blacks pulled down to black (HSL auto 2 applies it)
         public init() {}
-        public var isNeutral: Bool { abs(contrast) < 0.005 && abs(mids) < 0.005 }
+        public var isNeutral: Bool { abs(contrast) < 0.005 && abs(mids) < 0.005 && black < 0.003 }
 
-        /// The curve for one channel value (gamma-encoded 0…1); 0 and 1 stay where they are.
+        /// The curve for one channel value (gamma-encoded 0…1); 1 stays where it is, and 0 too unless the
+        /// black point moves (then `black` and below become 0).
         public func map(_ x: Double) -> Double {
-            var y = x + mids * 2 * x * (1 - x)              // mid-tones up or down
+            var y = black > 0 ? max(0, (x - black) / (1 - black)) : x
+            y += mids * 2 * y * (1 - y)                      // mid-tones up or down
             let s = y * y * (3 - 2 * y)
             y += (s - y) * contrast * 2                      // S-curve
             return min(1, max(0, y))
@@ -90,12 +93,14 @@ public enum AutoOperator {
             for (i, v) in h.enumerated() { acc += v; if acc >= p * total { return (Double(i) + 0.5) / Double(h.count) } }
             return 1
         }
-        let lo = percentile(0.02), hi = percentile(0.98), mid = percentile(0.5)
+        let lo = percentile(0.02), hi = percentile(0.98), mid = percentile(0.5), darkest = percentile(0.01)
         let span = hi - lo
         t.contrast = k * min(0.15, max(0, (0.75 - span) * 0.35))      // flat → a little more contrast
         // Dark → brighter mid-tones; very bright → a little darker; a normal picture is left alone.
         let m = mid < 0.42 ? (0.42 - mid) * 0.6 : (mid > 0.62 ? (0.62 - mid) * 0.5 : 0)
         t.mids = k * min(0.15, max(-0.1, m))
+        // The darkest 1 % still grey (a milky, lifted black): pull it down, at most 0.06; real blacks stay.
+        t.black = k * min(0.06, max(0, darkest - 0.035))
         return t
     }
 
@@ -109,8 +114,10 @@ public enum AutoOperator {
             if history.count > 15 { history.removeFirst() }
             let c = history.map(\.contrast).sorted()[history.count / 2]
             let m = history.map(\.mids).sorted()[history.count / 2]
+            let b = history.map(\.black).sorted()[history.count / 2]
             tone.contrast += (c - tone.contrast) * 0.08
             tone.mids += (m - tone.mids) * 0.08
+            tone.black += (b - tone.black) * 0.08
             return tone
         }
         public mutating func reset() { tone = Tone(); history = [] }

@@ -120,9 +120,14 @@ extension Camera {
         if p["accents"] != nil || p["accentAmt"] != nil {
             lock.withLock {
                 if let v = p["accents"] {
-                    let on = v == "1"
-                    if on != accentsOn { accentReset = true; autoSat = [Double](repeating: 0, count: 8) }
+                    let on = v == "1" || v == "2", portrait = v == "2"
+                    if on != accentsOn || portrait != portraitOn {
+                        accentReset = true
+                        autoSat = [Double](repeating: 0, count: 8)
+                        autoHue = [Double](repeating: 0, count: 8)
+                    }
                     accentsOn = on
+                    portraitOn = portrait
                 }
                 if let v = p["accentAmt"], let x = Double(v) { accentAmt = min(1, max(0, x)) }
             }

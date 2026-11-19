@@ -133,6 +133,7 @@ extension Camera {
         let t = toneTracker.update(AutoOperator.tone(histogram: hist, strength: 1))
         let changed = lock.withLock { () -> Bool in
             let big = abs(t.contrast - autoTone.contrast) > 0.005 || abs(t.mids - autoTone.mids) > 0.005
+                || abs(t.black - autoTone.black) > 0.003
             if big { autoTone = t }
             return big
         }

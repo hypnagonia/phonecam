@@ -224,7 +224,7 @@ enum Page {
         <div class="row"><label>Tint</label><input type="range" id="tint" min="-1" max="1" step="0.01"><output id="tintOut"></output></div>
         <div class="row"><label>Saturation</label><input type="range" id="sat" min="0" max="2" step="0.01"><output id="satOut"></output></div>
         <div class="row"><label>Contrast</label><input type="range" id="con" min="0.5" max="1.5" step="0.01"><output id="conOut"></output></div>
-        <div class="seg" data-k="accents" style="margin-top:12px" title="HSL: set each colour yourself, or let PhoneCam do it from the scene"><button data-v="0">HSL manual</button><button data-v="1">HSL auto</button></div>
+        <div class="seg" data-k="accents" style="margin-top:12px" title="HSL: set each colour yourself, or let PhoneCam do it from the scene"><button data-v="0">HSL manual</button><button data-v="1">HSL auto</button><button data-v="2" title="You stand out: richer, cleaner clothes colours, a tan, a calmer room">HSL auto 2</button></div>
         <div id="hslManual">
           <div class="hslhead"><span id="hslName">Red</span><div class="bands" id="bands"></div></div>
           <div class="row"><label>Hue</label><input type="range" id="hslH" min="-1" max="1" step="0.01"><output id="hslHOut"></output></div>
@@ -234,7 +234,8 @@ enum Page {
         <div id="hslAuto" hidden>
           <div class="row"><label>Strength</label><input type="range" id="accentAmt" min="0" max="1" step="0.01"><output id="accentAmtOut"></output></div>
           <div class="hint" id="accentInfo" style="margin-top:4px"></div>
-          <div class="hint">Small colourful things behind you (a lamp, a light strip, a poster) get a little richer, big loud surfaces a little calmer, skin never changes. Decided slowly from the last half minute, so the picture doesn't jump. Your manual HSL comes back when you switch to manual.</div>
+          <div class="hint" id="hintAuto1">Small colourful things behind you (a lamp, a light strip, a poster) get a little richer, big loud surfaces a little calmer, skin never changes. Decided slowly from the last half minute, so the picture doesn't jump. Your manual HSL comes back when you switch to manual.</div>
+          <div class="hint" id="hintAuto2" hidden>You stand out from the room: your clothes' colours get richer and are turned toward clean, pleasant hues; skin gets a warm tan, neither red nor green; one small colourful thing behind you, if there is one, gets richer; big coloured surfaces get calmer. Decided slowly from the last half minute.</div>
         </div>
         <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.1" step="0.002"><output id="blackOut"></output></div>
         <div class="hint">Warmth: bluer ↔ more amber. Tint: greener ↔ more magenta. HSL manual: hue, saturation and luminance of one colour at a time (pick it in the circles); a dot marks colours you changed. Skin is mostly orange.</div>
@@ -321,9 +322,11 @@ enum Page {
         if(st.tone==='1'&&st.toneNow){ const [c,m]=st.toneNow; parts.push((Math.abs(c)<0.01&&Math.abs(m)<0.01)?'tone: fine as it is':'tone: contrast +'+Math.round(c*100)+', mid-tones '+(m>=0?'+':'')+Math.round(m*100)) }
         $('opInfo').textContent=parts.length?'Now: '+parts.join(' · '):''; }
       setSlider('accentAmt',st.accentAmt,Math.round(st.accentAmt*100)+'%');
-      $('hslManual').hidden=st.accents==='1'; $('hslAuto').hidden=st.accents!=='1';
-      { const a=(st.accentSat||[]).map((v,i)=>[HSLN[i],v]).filter(x=>Math.abs(x[1])>=0.02);
-        $('accentInfo').textContent=a.length?'Now: '+a.map(([n,v])=>n+' saturation '+(v>0?'+':'')+Math.round(v*100)).join(', '):'Now: nothing to change (watching the scene)'; }
+      $('hslManual').hidden=st.accents!=='0'; $('hslAuto').hidden=st.accents==='0';
+      $('hintAuto1').hidden=st.accents!=='1'; $('hintAuto2').hidden=st.accents!=='2';
+      { const hue=st.accentHue||[], a=(st.accentSat||[]).map((v,i)=>[HSLN[i],v,hue[i]||0]).filter(x=>Math.abs(x[1])>=0.02||Math.abs(x[2])>=0.02);
+        const part=([n,v,h])=>n+' saturation '+(v>0?'+':'')+Math.round(v*100)+(Math.abs(h)>=0.02?', hue '+(h>0?'+':'')+Math.round(h*30)+'°':'');
+        $('accentInfo').textContent=(a.length?'Now: '+a.map(part).join('; '):'Now: nothing to change (watching the scene)')+(st.accents==='2'?' · skin: tan':''); }
       setSlider('con',st.con,Math.round(st.con*100)+'%');
       setSlider('black',st.black,(st.black>0?'+':'')+Math.round(st.black*1000)/10);
       setSlider('q',st.q,Math.round(st.q*100)+'%');

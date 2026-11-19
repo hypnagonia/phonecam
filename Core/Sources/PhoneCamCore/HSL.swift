@@ -106,14 +106,20 @@ public enum ColorCube {
         return d >= 30 ? 0 : 0.5 + 0.5 * cos(.pi * d / 30)
     }
 
-    /// One colour through the cube's adjustments.
+    /// The hue skin is turned toward by the tan (sRGB HSV degrees): warm, sun-kissed, neither red nor green.
+    public static let tanHue = 23.0
+
+    /// One colour through the cube's adjustments. `skinTan` 0…1 (HSL auto 2): skin tones (±30° around
+    /// `skinCenter`) are kept out of the HSL bands and given a tan instead (see `tan`).
     public static func apply(_ c0: SIMD3<Double>, hsl: HSL, saturation: Double, skinCenter: Double, skinShift: Double,
-                             tone: AutoOperator.Tone = AutoOperator.Tone()) -> SIMD3<Double> {
+                             tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0) -> SIMD3<Double> {
         var c = c0
         if let h = hue(c) {
             let mx = max(c.x, c.y, c.z), chroma = mx - min(c.x, c.y, c.z)
             let colourful = smoothstep(0.02, 0.12, chroma) // greys and near-greys stay as they are
-            let a = hsl.adjustment(hue: h)
+            let skinW = skinTan > 0 ? band30(h, min(35, max(12, skinCenter))) * colourful : 0
+            var a = hsl.adjustment(hue: h)
+            if skinW > 0 { a = (a.dh * (1 - skinW), a.ds * (1 - skinW), a.dl * (1 - skinW)) }
             if abs(a.dh) > 0.01 { c = c + (withHue(c, h + a.dh) - c) * colourful }
             // Saturation: the colour scaled around the grey of the same luma; skin (~25°) also keeps its
             // natural saturation whatever the global saturation slider does.
@@ -128,6 +134,7 @@ public enum ColorCube {
                 let k = 1 + 0.45 * a.dl * colourful * min(1, chroma / max(mx, 1e-6) * 1.5)
                 c = c * k
             }
+            if skinW > 0 { c = tan(c, amount: skinTan * skinW) }
         }
         if abs(skinShift) > 0.25 {
             // Skin white balance: turn the hue of skin tones (±30° around the face's hue) by skinShift.
@@ -142,12 +149,27 @@ public enum ColorCube {
         return c
     }
 
+    /// The tan for a skin tone: its hue halfway toward `tanHue` (at most 12°), so reddish skin warms up and
+    /// greenish skin comes back; a little richer (+12 %) and a touch deeper (−3.5 %), sun-kissed. `amount` 0…1.
+    public static func tan(_ c: SIMD3<Double>, amount k: Double) -> SIMD3<Double> {
+        guard k > 0, let h = hue(c) else { return c }
+        var d = (tanHue - h).truncatingRemainder(dividingBy: 360)
+        if d > 180 { d -= 360 }
+        if d < -180 { d += 360 }
+        var x = withHue(c, h + min(12, max(-12, d * 0.55)) * k)
+        let y = 0.2126 * x.x + 0.7152 * x.y + 0.0722 * x.z
+        x = SIMD3(repeating: y) + (x - SIMD3(repeating: y)) * (1 + 0.12 * k)
+        return x * (1 - 0.035 * k)
+    }
+
     /// CIColorCube data (RGBA Float32); nil when the cube would change nothing.
     public static func make(hsl: HSL, saturation: Double, skinCenter: Double, skinShift: Double,
-                            tone: AutoOperator.Tone = AutoOperator.Tone()) -> Data? {
-        guard !(hsl.isNeutral && abs(saturation - 1) < 0.01 && abs(skinShift) < 0.25 && tone.isNeutral) else { return nil }
+                            tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0) -> Data? {
+        guard !(hsl.isNeutral && abs(saturation - 1) < 0.01 && abs(skinShift) < 0.25 && tone.isNeutral && skinTan <= 0)
+        else { return nil }
         return CubeLUT.make(size: size) {
-            apply($0, hsl: hsl, saturation: saturation, skinCenter: skinCenter, skinShift: skinShift, tone: tone)
+            apply($0, hsl: hsl, saturation: saturation, skinCenter: skinCenter, skinShift: skinShift, tone: tone,
+                  skinTan: skinTan)
         }.cubeData(amount: 1)
     }
 }

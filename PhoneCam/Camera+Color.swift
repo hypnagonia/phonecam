@@ -79,12 +79,20 @@ extension Camera {
 
     /// queue: rebuild the colour cube from HSL, the saturation slider and the current skin correction.
     func rebuildCube() {
-        // HSL is either manual (the sliders) or auto (the accents found in the scene), never both.
-        let (h, sat, tone) = lock.withLock { (accentsOn ? HSL().addingSaturation(autoSat) : hsl, saturation,
-                                              toneOn ? autoTone : AutoOperator.Tone()) }
+        // HSL is either manual (the sliders) or auto (from the scene), never both. HSL auto 2 also turns hues
+        // (clothes toward clean colours) and gives skin a tan instead of the bands, at the same strength.
+        let (h, sat, tone, tan) = lock.withLock { () -> (HSL, Double, AutoOperator.Tone, Double) in
+            var auto = HSL().addingSaturation(autoSat)
+            if portraitOn { auto.hue = autoHue }
+            // Auto tone's contrast and mid-tones as always; its black point only in HSL auto 2
+            var tone = toneOn ? autoTone : AutoOperator.Tone()
+            if !(accentsOn && portraitOn) { tone.black = 0 }
+            return (accentsOn ? auto : hsl, saturation, tone, accentsOn && portraitOn ? accentAmt : 0)
+        }
         let shift = skinWB ? skinShift : 0
         builtShift = shift
-        let cube = ColorCube.make(hsl: h, saturation: sat, skinCenter: faceHueDeg ?? Camera.skinHueDeg, skinShift: shift, tone: tone)
+        let cube = ColorCube.make(hsl: h, saturation: sat, skinCenter: faceHueDeg ?? Camera.skinHueDeg, skinShift: shift,
+                                  tone: tone, skinTan: tan)
         lock.withLock { hueCube = cube }
     }
 
@@ -93,11 +101,11 @@ extension Camera {
     func analyzeAccents(_ pb: CVPixelBuffer) {
         accentFrame += 1
         guard accentFrame % 60 == 30 else { return }
-        let (on, amt, win, face, faceT, reset) = lock.withLock { () -> (Bool, Double, CGRect, CGRect?, Double, Bool) in
+        let (on, portrait, amt, win, face, faceT, reset) = lock.withLock { () -> (Bool, Bool, Double, CGRect, CGRect?, Double, Bool) in
             let r = accentReset; accentReset = false
-            return (accentsOn, accentAmt, window, faceRect, faceRectTime, r)
+            return (accentsOn, portraitOn, accentAmt, window, faceRect, faceRectTime, r)
         }
-        if reset { accentTracker.reset() }
+        if reset { accentTracker.reset(); portraitHue.reset(); portraitSat.reset() }
         guard on else { return }
         let img = CIImage(cvPixelBuffer: pb)
         let w = 96, h = 54
@@ -106,11 +114,21 @@ extension Camera {
         ci.render(small, toBitmap: &px, rowBytes: w * 4, bounds: CGRect(x: 0, y: 0, width: w, height: h),
                   format: .RGBA8, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
         let seen = CACurrentMediaTime() - faceT < 2 ? face : nil
-        let stats = Accents.analyze(rgba: px, width: w, height: h, window: win, face: seen)
-        let v = accentTracker.update(Accents.target(stats, strength: amt, faceInView: seen != nil))
+        var v: [Double], hues = [Double](repeating: 0, count: 8)
+        if portrait {
+            let rot = lock.withLock { rotation }
+            let skin = faceHueDeg ?? Camera.skinHueDeg
+            let t = Portrait.target(Portrait.analyze(rgba: px, width: w, height: h, window: win, face: seen, rotation: rot,
+                                                     skinHue: skin), strength: amt)
+            v = portraitSat.update(t.sat)
+            hues = portraitHue.update(t.hue)
+        } else {
+            let stats = Accents.analyze(rgba: px, width: w, height: h, window: win, face: seen)
+            v = accentTracker.update(Accents.target(stats, strength: amt, faceInView: seen != nil))
+        }
         let changed = lock.withLock { () -> Bool in
-            let big = zip(v, autoSat).contains { abs($0 - $1) > 0.02 }
-            if big { autoSat = v }
+            let big = zip(v, autoSat).contains { abs($0 - $1) > 0.02 } || zip(hues, autoHue).contains { abs($0 - $1) > 0.02 }
+            if big { autoSat = v; autoHue = hues }
             return big
         }
         if changed { queue.async { self.rebuildCube() } }
