@@ -20,6 +20,7 @@ final class Relay: ObservableObject {
     @Published var cameraTransport = "–"  // how the camera stream arrives: UDP or TCP
     @Published private(set) var paused = false // camera stopped from the menu: apps get "no signal", the iPhone sleeps
     @Published private(set) var presets: [String] = [] // saved on the iPhone, for the menu
+    @Published private(set) var interrupted = ""      // why iOS stopped the iPhone camera, for the menu
 
     private static let key: String = {
         let k = (Bundle.main.object(forInfoDictionaryKey: "PhoneCamKey") as? String) ?? ""
@@ -80,9 +81,13 @@ final class Relay: ObservableObject {
     /// Menu: the iPhone's presets (read from /state through this relay).
     func refreshPresets() {
         URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:\(Relay.port)/state")!) { [weak self] data, _, _ in
-            guard let data, let st = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let list = st["presets"] as? [String] else { return }
-            DispatchQueue.main.async { if self?.presets != list { self?.presets = list } }
+            guard let data, let st = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            let list = st["presets"] as? [String] ?? []
+            let why = st["interrupted"] as? String ?? ""
+            DispatchQueue.main.async {
+                if self?.presets != list { self?.presets = list }
+                if self?.interrupted != why { self?.interrupted = why }
+            }
         }.resume()
     }
 

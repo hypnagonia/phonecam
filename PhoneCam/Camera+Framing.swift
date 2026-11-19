@@ -23,14 +23,20 @@ extension Camera {
             let phiDeg = phi * 180 / .pi
             var cand = Int(((phiDeg + 180) / 90).rounded()) * 90 % 360
             if cand < 0 { cand += 360 }
-            if abs(dev) < .pi / 6 {
-                if cand == self.rotCandidate { self.rotStable += 1 } else { self.rotCandidate = cand; self.rotStable = 0 }
+            // An unclear sample (between two positions, or a bump) restarts the count. The switch goes to the
+            // candidate that was stable, never to this sample's guess: one bumped sample used to flip the
+            // picture by 90° and the next one flipped it back.
+            if abs(dev) < .pi / 6, cand == self.rotCandidate {
+                self.rotStable += 1
+            } else {
+                self.rotCandidate = abs(dev) < .pi / 6 ? cand : -1
+                self.rotStable = 0
             }
-            let settle = self.rotStable >= 10
+            let settled = self.rotStable >= 10 ? self.rotCandidate : -1
             self.lock.withLock {
-                self.tilt += (d - self.tilt) * 0.2
+                self.tilt += (d - self.tilt) * 0.05 // ~2 s to settle: the horizon doesn't wobble with sensor noise
                 self.gravityDeg = phiDeg
-                if self.autoRot, settle, self.rotation != cand { self.rotation = cand }
+                if self.autoRot, settled >= 0, self.rotation != settled { self.rotation = settled }
             }
         }
     }

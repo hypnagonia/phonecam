@@ -145,6 +145,7 @@ enum Page {
     <header>
       <div class="brand"><i></i>PhoneCam</div>
       <div class="chip" id="sleep" title="No app uses the camera: the iPhone camera sleeps and wakes in about a second when it is used" hidden>Camera asleep</div>
+      <div class="chip" id="intr" title="iOS stopped the iPhone camera; it starts again by itself when the reason is gone" hidden></div>
       <div class="chip" id="heat" title="iPhone temperature (iOS thermal state)" hidden></div>
       <div class="chip" id="dark" title="Dark room at 60 fps: 30 fps lets the shutter stay open twice as long, with less noise. Back to 60 fps when it is brighter." hidden>Low light: 30 fps</div>
       <div class="chip" id="link" title="How the Mac reaches the iPhone">–</div>
@@ -329,6 +330,7 @@ enum Page {
       $('tiltOut').textContent='tilt '+st.tilt+'°, rotation '+st.rotNow+'°';
       $('faceOut').textContent=st.focus==='face'?(st.faceSeen?'● face found':'no face'):'';
       $('sleep').hidden=!st.asleep;
+      const intr=$('intr'); intr.hidden=!st.interrupted; intr.textContent='Camera stopped: '+(st.interrupted||'');
       const heat=$('heat'); heat.hidden=!st.thermal||st.thermal==='ok';
       heat.textContent=st.heatLimited?'iPhone hot: 1080p 30 fps until it cools':({warm:'iPhone warm',hot:'iPhone hot',critical:'iPhone overheating'}[st.thermal]||'');
       heat.hidden=heat.hidden&&!st.heatLimited;

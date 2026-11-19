@@ -20,9 +20,13 @@ extension Camera {
                 self.lastViewer = now
                 if self.asleep {
                     self.asleep = false
+                    self.restartAt = now
                     self.session.startRunning()
                     self.restoreZoom()           // startRunning resets the zoom factor
                     self.encoder.requestKeyframe()
+                } else if self.interrupted == nil, now - self.lock.withLock({ self.lastFrameAt }) > 3,
+                          now - self.restartAt > 5 {
+                    self.restartSession()        // watched, running, yet no frames: a stop iOS didn't report
                 }
             } else if !self.asleep, self.sleepSoon || now - self.lastViewer > Camera.sleepAfter {
                 self.sleepSoon = false
@@ -33,6 +37,49 @@ extension Camera {
         }
         t.resume()
         idleTimer = t
+    }
+
+    /// Restart the camera after iOS interrupts it (app in the background, camera taken by another app,
+    /// Split View, heat) or after a runtime error; the reason goes to /state as `interrupted`.
+    func observeSession() {
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { [weak self] n in
+            let raw = n.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int
+            let why: String
+            switch raw.flatMap(AVCaptureSession.InterruptionReason.init(rawValue:)) {
+            case .videoDeviceNotAvailableInBackground: why = "PhoneCam is in the background on the iPhone"
+            case .videoDeviceInUseByAnotherClient: why = "another app uses the iPhone camera"
+            case .videoDeviceNotAvailableWithMultipleForegroundApps: why = "Split View or Slide Over on the iPhone"
+            case .videoDeviceNotAvailableDueToSystemPressure: why = "iPhone too hot"
+            default: why = "stopped by iOS"
+            }
+            self?.queue.async { self?.interrupted = why }
+        }
+        nc.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil) { [weak self] _ in
+            self?.queue.async {
+                self?.interrupted = nil
+                self?.restartSession()
+            }
+        }
+        nc.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil) { [weak self] n in
+            let err = n.userInfo?[AVCaptureSessionErrorKey] as? AVError
+            self?.queue.async {
+                guard let self else { return }
+                // Media services reset: wait for the interruption to end, the session restarts then.
+                if err?.code == .mediaServicesWereReset, self.interrupted != nil { return }
+                self.restartSession()
+            }
+        }
+    }
+
+    /// queue: start the capture again (unless asleep), with the zoom and a keyframe restored.
+    func restartSession() {
+        guard !asleep else { return }
+        restartAt = CACurrentMediaTime()
+        if session.isRunning { session.stopRunning() }
+        session.startRunning()
+        restoreZoom() // startRunning resets the zoom factor
+        encoder.requestKeyframe()
     }
 
     /// queue, once a second: hot → 1080p 30 fps; a minute of cool → back to the chosen size and rate.

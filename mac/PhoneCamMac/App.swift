@@ -41,6 +41,9 @@ struct MenuView: View {
                 Text(relay.phone.map { "iPhone at \($0)" } ?? "iPhone not found").font(.headline)
             }
             Text(relay.paused ? "Camera stopped" : "Camera stream: \(relay.cameraTransport)").font(.caption).foregroundStyle(.secondary)
+            if !relay.interrupted.isEmpty {
+                Text("iPhone camera stopped: \(relay.interrupted)").font(.caption).foregroundStyle(.orange)
+            }
             Text(relay.listening ? "Relay on localhost:\(Relay.port) · \(relay.connections) open"
                  : relay.portBusy ? "Port \(Relay.port) is used by another relay (that is fine)"
                  : "Starting relay…")

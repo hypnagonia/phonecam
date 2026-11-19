@@ -138,6 +138,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var lastViewer = CACurrentMediaTime() // on `queue`
     var idleTimer: DispatchSourceTimer?
     var asleep = false               // on `queue`
+    var interrupted: String?         // on `queue`: why iOS stopped the camera (background, another app …); nil while it runs
+    var restartAt = 0.0              // on `queue`: last start or restart of the session
+    var lastFrameAt = 0.0            // under `lock`: time of the last frame from the sensor
     var sleepSoon = false                 // on `queue`: the Mac stopped the camera: sleep as soon as nobody watches
     var encMs = 0.0   // render + JPEG time per frame (moving average)
     var anaMs = 0.0   // skin colour and highlight measurements per frame (moving average)
@@ -167,6 +170,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
                 self.session.startRunning()
                 self.startMotion()
                 self.restoreZoom() // startRunning resets the zoom factor
+                self.restartAt = CACurrentMediaTime()
+                self.observeSession()
                 self.startSleepTimer()
             }
         }
@@ -306,6 +311,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "presets": Presets.sortedNames(Camera.presets),
             "realFps": n((measuredFps * 10).rounded() / 10),
             "asleep": asleep,
+            "interrupted": interrupted ?? "",
             "bitDepth": bitDepth,
             "cap": cap,
             "thermal": ["ok", "warm", "hot", "critical"][min(3, ProcessInfo.processInfo.thermalState.rawValue)],
@@ -350,6 +356,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer, from connection: AVCaptureConnection) {
         frameCount += 1
         let now = CACurrentMediaTime()
+        lock.withLock { lastFrameAt = now }
         if now - fpsStart >= 1 {
             measuredFps = Double(frameCount) / (now - fpsStart)
             frameCount = 0
@@ -397,9 +404,12 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         }
         // Rolling the phone by +β about its z axis makes gravity read -β; the rear camera (looking along -z)
         // then sees the scene turned clockwise, so the picture is turned back by +β: angle = -tilt.
-        // Below 0.5° nobody sees the tilt, so the frame isn't resampled for it.
+        // Below 0.5° nobody sees the tilt, so the frame isn't resampled for it. Above, only the part past
+        // 0.5° is corrected, so the turn and its zoom grow from zero: a hard on/off at 0.5° made the picture
+        // jump (turn + 1.6 % zoom) each time sensor noise crossed it.
         let (lv, tl) = lock.withLock { (level, tilt) }
-        if lv, abs(tl) > 0.5 * .pi / 180 { img = Camera.leveled(img, angle: -tl) }
+        let dead = 0.5 * .pi / 180
+        if lv, abs(tl) > dead { img = Camera.leveled(img, angle: -(tl - (tl > 0 ? dead : -dead))) }
         let (cube, look) = lock.withLock { (hueCube, lutCube) }
         let e0 = img.extent
         // Grade in gamma-encoded sRGB, like a photo editor, not in CoreImage's linear space.
