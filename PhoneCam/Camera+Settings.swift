@@ -8,7 +8,7 @@ import PhoneCamCore
 extension Camera {
     // MARK: settings API (call on `queue`)
 
-    static let persisted = ["lens", "fps", "cap", "rot", "q", "sat", "con", "black", "hsl", "accents", "accentAmt", "steady", "light", "lightAmt", "tone", "skinWarm", "warm", "tint", "zoom", "wb", "exp", "mains", "lut", "lutAmt", "frame", "level"]
+    static let persisted = ["lens", "fps", "cap", "rot", "q", "sat", "con", "black", "hsl", "accents", "accentAmt", "steady", "light", "lightAmt", "tone", "skinWarm", "warm", "tint", "zoom", "wb", "exp", "mains", "lut", "lutAmt", "frame", "level", "teeth"]
 
     static func saved() -> [String: String] {
         var p = (UserDefaults.standard.dictionary(forKey: "settings") as? [String: String]) ?? [:]
@@ -113,6 +113,7 @@ extension Camera {
                 if let v = p["lightAmt"], let x = Double(v) { lightAmt = min(1, max(0, x)) }
             }
         }
+        if let v = p["teeth"], let x = Double(v) { lock.withLock { teethAmount = min(1, max(0, x)) } }
         if let v = p["tone"] {
             lock.withLock { toneOn = v == "1"; if !toneOn { autoTone = AutoOperator.Tone(); toneReset = true } }
             rebuildCube()

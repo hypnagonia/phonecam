@@ -237,6 +237,7 @@ enum Page {
           <div class="hint" id="hintAuto1">Small colourful things behind you (a lamp, a light strip, a poster) get a little richer, big loud surfaces a little calmer, skin never changes. Decided slowly from the last half minute, so the picture doesn't jump. Your manual HSL comes back when you switch to manual.</div>
           <div class="hint" id="hintAuto2" hidden>You stand out from the room: your clothes' colours get richer and are turned toward clean, pleasant hues; skin gets a warm tan, neither red nor green; one small colourful thing behind you, if there is one, gets richer; big coloured surfaces get calmer. Decided slowly from the last half minute.</div>
         </div>
+        <div class="row" title="Whiter teeth when your mouth is open (finds the mouth with face landmarks; 0 is off)"><label>Teeth</label><input type="range" id="teeth" min="0" max="1" step="0.01"><output id="teethOut"></output></div>
         <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.1" step="0.002"><output id="blackOut"></output></div>
         <div class="hint">Warmth: bluer ↔ more amber. Tint: greener ↔ more magenta. HSL manual: hue, saturation and luminance of one colour at a time (pick it in the circles); a dot marks colours you changed. Skin is mostly orange.</div>
       </section>
@@ -327,6 +328,7 @@ enum Page {
       { const hue=st.accentHue||[], a=(st.accentSat||[]).map((v,i)=>[HSLN[i],v,hue[i]||0]).filter(x=>Math.abs(x[1])>=0.02||Math.abs(x[2])>=0.02);
         const part=([n,v,h])=>n+' saturation '+(v>0?'+':'')+Math.round(v*100)+(Math.abs(h)>=0.02?', hue '+(h>0?'+':'')+Math.round(h*30)+'°':'');
         $('accentInfo').textContent=(a.length?'Now: '+a.map(part).join('; '):'Now: nothing to change (watching the scene)')+(st.accents==='2'?' · skin: tan':''); }
+      setSlider('teeth',st.teeth,st.teeth>0.01?Math.round(st.teeth*100)+'%'+(st.mouthOpen?'':' –'):'Off');
       setSlider('con',st.con,Math.round(st.con*100)+'%');
       setSlider('black',st.black,(st.black>0?'+':'')+Math.round(st.black*1000)/10);
       setSlider('q',st.q,Math.round(st.q*100)+'%');
@@ -358,9 +360,9 @@ enum Page {
       iso:v=>({iso:fromLog(v,st.isoMin,st.isoMax)}),
       shutter:v=>({shutter:fromLog(v,st.shutterMin,st.shutterMax)}),
       temp:v=>({temp:v}), q:v=>({q:v}), lutAmt:v=>({lutAmt:v}),
-      sat:v=>({sat:v}), hslH:v=>hslSet(0,v), hslS:v=>hslSet(1,v), hslL:v=>hslSet(2,v), accentAmt:v=>({accentAmt:v}), lightAmt:v=>({lightAmt:v}), skinWarm:v=>({skinWarm:v}), warm:v=>({warm:v}), tint:v=>({tint:v}), con:v=>({con:v}), black:v=>({black:v}),
+      sat:v=>({sat:v}), hslH:v=>hslSet(0,v), hslS:v=>hslSet(1,v), hslL:v=>hslSet(2,v), accentAmt:v=>({accentAmt:v}), teeth:v=>({teeth:v}), lightAmt:v=>({lightAmt:v}), skinWarm:v=>({skinWarm:v}), warm:v=>({warm:v}), tint:v=>({tint:v}), con:v=>({con:v}), black:v=>({black:v}),
     };
-    const defaults={lutAmt:0.7,accentAmt:0.6,lightAmt:0.5,hslH:0,hslS:0,hslL:0,skinWarm:0,warm:0,tint:0,sat:1,con:1,black:0,zoom:1.15,ev:0};
+    const defaults={teeth:0,lutAmt:0.7,accentAmt:0.6,lightAmt:0.5,hslH:0,hslS:0,hslL:0,skinWarm:0,warm:0,tint:0,sat:1,con:1,black:0,zoom:1.15,ev:0};
     for(const [id,fn] of Object.entries(sliders)){
       const el=$(id);
       el.addEventListener('pointerdown',()=>busy.add(id));

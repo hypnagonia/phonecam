@@ -2,6 +2,7 @@ import AVFoundation
 import CoreImage
 import QuartzCore
 import CoreMotion
+import Vision
 import PhoneCamCore
 
 /// Owns the capture session. All device configuration runs on `queue`.
@@ -88,6 +89,14 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var hsl = HSL()        // under `lock`: hue, saturation and luminance per colour
     // Auto accents (see Accents in PhoneCamCore): small colourful things in the background get richer.
     var accentsOn = false          // under `lock`
+    // Teeth (Camera+Teeth.swift): whiter inside the open mouth, found with Vision face landmarks
+    var teethAmount = 0.0          // under `lock`: 0…1, 0 = off (no landmarks run then)
+    var mouth: Mouth?              // under `lock`, sensor-normalized
+    var mouthTime = 0.0            // under `lock`
+    var mouthBusy = false, mouthLastRun = 0.0 // under `lock`
+    let mouthQueue = DispatchQueue(label: "cam.mouth", qos: .userInitiated)
+    lazy var landmarks = VNDetectFaceLandmarksRequest()
+    var teethCube: (amount: Double, data: Data)? // videoQueue
     var portraitOn = false         // under `lock`: HSL auto 2 (accents is on too): clothes, accent, calm room, tan
     var autoHue = [Double](repeating: 0, count: 8) // under `lock`: HSL auto 2's hue turns now
     var portraitHue = Accents.Tracker(), portraitSat = Accents.Tracker() // videoQueue
@@ -292,6 +301,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let f = d.activeFormat
         let tt = d.temperatureAndTintValues(for: d.deviceWhiteBalanceGains)
         let st = stats
+        let teeth: Double = lock.withLock { teethAmount }
+        let mouthOpen: Bool = lock.withLock { CACurrentMediaTime() - mouthTime < 0.6 && (mouth?.open ?? 0) > 0.12 }
         let (rot, q, sat, con, blk) = lock.withLock { (rotation, quality, saturation, contrast, black) }
         func n(_ x: Double) -> Double { x.isFinite ? x : 0 }
         let focus: String
@@ -328,6 +339,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "q": q, "sat": sat, "con": con, "black": blk, "hsl": lock.withLock { hsl.string },
             "accents": lock.withLock { accentsOn ? (portraitOn ? "2" : "1") : "0" }, "accentAmt": lock.withLock { accentAmt },
             "accentHue": lock.withLock { autoHue.map { ($0 * 100).rounded() / 100 } },
+            "teeth": teeth, "mouthOpen": mouthOpen,
             "accentSat": lock.withLock { autoSat.map { ($0 * 100).rounded() / 100 } },
             "skinWarm": skinWarm, "warm": lock.withLock { warm }, "tint": lock.withLock { tint },
             "faceHue": n(((faceHueDeg ?? 0) * 10).rounded() / 10), "skinShift": n((skinShift * 10).rounded() / 10),
@@ -404,6 +416,10 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             img = Camera.fit(img) // 4K capture → 1080p stream
         }
         if shown.width == 1, shown.height == 1 { lock.withLock { window = shown } }
+        if lock.withLock({ teethAmount }) > 0.01 {      // still in sensor orientation, as the mouth is
+            requestMouth(pb, rotation: rot)
+            img = withWhiterTeeth(img, window: shown)
+        }
         // Geometry first (turn upright, level), then all colour work in one sRGB pass, dither last in it.
         switch rot {
         case 90: img = img.oriented(.right)
