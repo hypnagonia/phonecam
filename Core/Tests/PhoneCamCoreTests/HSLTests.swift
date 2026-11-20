@@ -56,3 +56,24 @@ final class HSLTests: XCTestCase {
         XCTAssertEqual(h.sat[0], 0)
     }
 }
+
+final class VibranceTests: XCTestCase {
+    private func sat(_ c: SIMD3<Double>) -> Double { (max(c.x, c.y, c.z) - min(c.x, c.y, c.z)) / max(c.x, c.y, c.z) }
+    private func vib(_ c: SIMD3<Double>, _ v: Double) -> SIMD3<Double> {
+        ColorCube.apply(c, hsl: HSL(), saturation: 1, skinCenter: 20, skinShift: 0, vibrance: v)
+    }
+
+    func testWeakColoursGainMostFullOnesAlmostNothing() {
+        let weak = SIMD3(0.40, 0.50, 0.62), full = SIMD3(0.05, 0.30, 0.95)
+        XCTAssertGreaterThan(sat(vib(weak, 1)) / sat(weak), 1.15)
+        XCTAssertLessThan(sat(vib(full, 1)) / sat(full), 1.02)
+        XCTAssertEqual(vib(weak, 0), weak)
+    }
+
+    func testSkinAndGreyAreSpared() {
+        let skin = SIMD3(0.78, 0.60, 0.50), blue = SIMD3(0.50, 0.60, 0.78) // equally weak colours
+        XCTAssertLessThan(sat(vib(skin, 1)) / sat(skin), 1 + (sat(vib(blue, 1)) / sat(blue) - 1) * 0.4)
+        let grey = SIMD3(repeating: 0.5)
+        XCTAssertEqual(vib(grey, 1), grey)
+    }
+}

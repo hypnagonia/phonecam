@@ -65,14 +65,24 @@ public enum AutoOperator {
     public struct Tone: Equatable {
         public var contrast = 0.0   // 0…0.15: S-curve strength
         public var mids = 0.0       // -0.1…0.15: + brighter mid-tones
-        public var black = 0.0      // 0…0.06: milky blacks pulled down to black (HSL auto 2 applies it)
+        public var black = 0.0      // 0…0.14: the black point. What is darkest in the picture but still grey (haze from
+                                    // a window behind you, a lifted exposure) becomes black
+        public var white = 0.0      // 0…0.08: the white point. What is brightest but short of white becomes white
         public init() {}
-        public var isNeutral: Bool { abs(contrast) < 0.005 && abs(mids) < 0.005 && black < 0.003 }
+        public var isNeutral: Bool { abs(contrast) < 0.005 && abs(mids) < 0.005 && black < 0.003 && white < 0.003 }
 
-        /// The curve for one channel value (gamma-encoded 0…1); 1 stays where it is, and 0 too unless the
-        /// black point moves (then `black` and below become 0).
+        /// The curve for one channel value (gamma-encoded 0…1): the tones between `black` and `1 − white` are spread
+        /// over the whole range, and the two ends are rounded off (a toe and a shoulder half as wide as the point
+        /// moved), so shadows sink into black and highlights rise into white instead of being cut at a hard edge.
         public func map(_ x: Double) -> Double {
-            var y = black > 0 ? max(0, (x - black) / (1 - black)) : x
+            var y = x
+            if black > 0 || white > 0 {
+                y = (x - black) / (1 - black - white)
+                let toe = min(0.08, black * 0.5), sh = min(0.06, white * 0.5)
+                if toe > 0, y < toe { y = y <= -toe ? 0 : (y + toe) * (y + toe) / (4 * toe) }
+                if sh > 0, y > 1 - sh { y = y >= 1 + sh ? 1 : 1 - (1 + sh - y) * (1 + sh - y) / (4 * sh) }
+                y = min(1, max(0, y))
+            }
             y += mids * 2 * y * (1 - y)                      // mid-tones up or down
             let s = y * y * (3 - 2 * y)
             y += (s - y) * contrast * 2                      // S-curve
@@ -99,8 +109,12 @@ public enum AutoOperator {
         // Dark → brighter mid-tones; very bright → a little darker; a normal picture is left alone.
         let m = mid < 0.42 ? (0.42 - mid) * 0.6 : (mid > 0.62 ? (0.62 - mid) * 0.5 : 0)
         t.mids = k * min(0.15, max(-0.1, m))
-        // The darkest 1 % still grey (a milky, lifted black): pull it down, at most 0.06; real blacks stay.
-        t.black = k * min(0.06, max(0, darkest - 0.035))
+        // The points, on purpose not all the way: the darkest 1 % still grey goes 70 % of the way to a deep (not
+        // dead) black at 4 %, by at most 0.14; the brightest half per cent goes 60 % of the way to 96 %, by at most
+        // 0.08. Taken all the way (2 % and 98 %) the picture was hard: shadows blocked up, the wall behind burnt.
+        // The caps also keep a dim evening room from being stretched into day.
+        t.black = k * min(0.14, max(0, (darkest - 0.04) * 0.7))
+        t.white = k * min(0.08, max(0, (0.96 - percentile(0.995)) * 0.6))
         return t
     }
 
@@ -115,9 +129,12 @@ public enum AutoOperator {
             let c = history.map(\.contrast).sorted()[history.count / 2]
             let m = history.map(\.mids).sorted()[history.count / 2]
             let b = history.map(\.black).sorted()[history.count / 2]
+            let w = history.map(\.white).sorted()[history.count / 2]
             tone.contrast += (c - tone.contrast) * 0.08
             tone.mids += (m - tone.mids) * 0.08
-            tone.black += (b - tone.black) * 0.08
+            // the points faster than the curve: a haze over the whole picture is plain to see while it lasts
+            tone.black += (b - tone.black) * 0.25
+            tone.white += (w - tone.white) * 0.25
             return tone
         }
         public mutating func reset() { tone = Tone(); history = [] }

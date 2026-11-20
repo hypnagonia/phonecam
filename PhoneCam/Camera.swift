@@ -54,6 +54,14 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // Settings, touched only on `queue`.
     var lens = "wide"
     var fps = 30
+    var faceExpOn = true            // under `lock`: the developing exposure follows the face's brightness
+    var logStops = 0.0              // videoQueue: what that has added so far, in stops (−1…+0.8)
+    var chartUntil = 0.0            // under `lock`: the test chart is shown until then
+    var logOn = false               // under `lock`: the frames arrive in Apple Log and are developed by `source`
+    lazy var logCube = AppleLog.cubeData() // videoQueue
+    // "log": Apple Log developed by PhoneCam (where the camera has it); "hdr": the iPhone's own picture with
+    // video HDR, as before Apple Log (the Legacy tab). On `queue`.
+    var proc = "log"
     var cap = "4k"                 // capture size: "4k" (sharpest crops) or "1080" (cooler, less battery)
     // Heat: while the iPhone is hot, capture drops to 1080p at 30 fps; the chosen settings come back once it
     // has been cool for a minute. On `queue`.
@@ -66,10 +74,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var darkSince: Double?, brightSince: Double?
     // Lamps on mains power flicker: "auto" (from the phone's region), "50" or "60" Hz. On `queue`.
     var mains = "auto"
-    // Look: a built-in look or the user's .cube LUT ("" = none), and its strength. On `queue`.
-    var lut = ""
-    var lutAmt = 0.7
-    var lutTable: (name: String, lut: CubeLUT)?
     var eyeCubeFor = -1.0                  // videoQueue
     var eyeCubeData: Data?                 // videoQueue
     var mainsHz: Int { mains == "50" ? 50 : mains == "60" ? 60 : Flicker.mainsHz(region: Locale.current.region?.identifier) }
@@ -83,6 +87,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var rotation = 0
     var quality = 0.95
     var saturation = 1.2   // 0…2
+    var vibrance = 0.35    // 0…1, under `lock`: weak colours richer, full ones and skin left alone
     var contrast = 1.0     // 0.5…1.5
     var black = 0.0        // -0.1 (lift) … +0.1 (crush)
     var warm = 0.0, tint = 0.0 // under `lock`: manual colour balance, -1…1 (warm: blue↔amber, tint: green↔magenta)
@@ -119,7 +124,6 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var toneTracker = AutoOperator.ToneTracker() // videoQueue
     var toneReset = false                 // under `lock`
     var hueCube: Data?     // 32³ colour cube for HSL, saturation and skin, rebuilt when they change
-    var lutCube: (data: Data, size: Int)? // the look (LUT) mixed to its strength; nil = none
     var framing = true     // auto-frame: crop follows the face
     var level = true       // auto-level: rotate the picture so the horizon is straight
     var tilt = 0.0         // under `lock`: smoothed roll of the phone, radians (0 = level)
@@ -231,7 +235,16 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         // Faces, plus whole bodies as a fallback for auto-frame when the face is turned away or hidden.
         faces.metadataObjectTypes = [.face, .humanBody].filter { faces.availableMetadataObjectTypes.contains($0) }
         session.commitConfiguration()
-        withDevice { d in if d.isLowLightBoostSupported { d.automaticallyEnablesLowLightBoostWhenAvailable = true } }
+        withDevice { d in
+            if d.isLowLightBoostSupported { d.automaticallyEnablesLowLightBoostWhenAvailable = true }
+            // Video HDR (the iPhone merges exposures and lifts shadows) has no place in Apple Log; a camera
+            // without Log keeps the iPhone's normal picture.
+            let isLog = d.activeColorSpace == .appleLog
+            if d.activeFormat.isVideoHDRSupported {
+                d.automaticallyAdjustsVideoHDREnabled = !isLog
+                if isLog { d.isVideoHDREnabled = false }
+            }
+        }
         applyFps()
         restoreZoom()
     }
@@ -255,8 +268,11 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             session.sessionPreset = .inputPriority
             guard (try? d.lockForConfiguration()) != nil else { continue }
             d.activeFormat = fmt
-            d.activeColorSpace = .sRGB
+            // Apple Log where the camera has it (almost none of the iPhone's own processing; developed in `source`).
+            d.activeColorSpace = proc == "log" && fmt.supportedColorSpaces.contains(.appleLog) ? .appleLog : .sRGB
             d.unlockForConfiguration()
+            let isLog = d.activeColorSpace == .appleLog
+            lock.withLock { logOn = isLog }
             if output.availableVideoPixelFormatTypes.contains(tenBit) {
                 output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: tenBit]
                 bitDepth = 10
@@ -264,6 +280,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             }
         }
         // No 10-bit SDR mode: back to the 8-bit 4K preset.
+        lock.withLock { logOn = false }
         bitDepth = 8
         output.videoSettings = nil
         session.sessionPreset = capPreset
@@ -299,6 +316,35 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     }
 
 
+    /// videoQueue: a camera frame as a picture. Apple Log frames are taken as their raw code values (no colour
+    /// management: Core Image does not know the curve) and developed here, so everything after this, the
+    /// analysis and the grading alike, sees a normal picture.
+    func source(_ pb: CVPixelBuffer) -> CIImage {
+        guard lock.withLock({ logOn }) else { return CIImage(cvPixelBuffer: pb) }
+        var raw = CIImage(cvPixelBuffer: pb, options: [.colorSpace: NSNull()])
+        if abs(logStops) > 0.01 {
+            let o = AppleLog.codeOffset(stops: logStops)
+            raw = raw.applyingFilter("CIColorMatrix", parameters: ["inputBiasVector": CIVector(x: o, y: o, z: o, w: 0)])
+        }
+        return raw
+            .applyingFilter("CIColorCube", parameters: ["inputCubeDimension": 48, "inputCubeData": logCube])
+    }
+
+    /// A test chart instead of the picture (`/set?chart=1`, for 12 s): twelve bars of known sRGB values, to check
+    /// that what leaves the phone arrives unchanged at the Mac's camera. Nine greys, then red, green, blue.
+    static let chartValues: [[Double]] = [0, 32, 64, 96, 128, 160, 192, 224, 255].map { [$0, $0, $0] }
+        + [[200, 40, 40], [40, 200, 40], [40, 40, 200]]
+    static let chart: CIImage = {
+        let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
+        let w = CGFloat(HEVCEncoder.width) / CGFloat(chartValues.count), h = CGFloat(HEVCEncoder.height)
+        var img = CIImage(color: .black).cropped(to: CGRect(x: 0, y: 0, width: CGFloat(HEVCEncoder.width), height: h))
+        for (i, v) in chartValues.enumerated() {
+            let c = CIColor(red: v[0] / 255, green: v[1] / 255, blue: v[2] / 255, colorSpace: srgb) ?? .black
+            img = CIImage(color: c).cropped(to: CGRect(x: CGFloat(i) * w, y: 0, width: w, height: h)).composited(over: img)
+        }
+        return img
+    }()
+
     func state() -> [String: Any] {
         guard let d = device else { return ["ok": false] }
         let f = d.activeFormat
@@ -327,19 +373,18 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "fps": fps,
             "heatLimited": heatLimited, "darkLimited": darkLimited,
             "mains": mains, "mainsHz": mainsHz,
-            "lut": lut, "lutAmt": lutAmt, "looks": Looks.names, "luts": Camera.userLUTs(),
             "presets": Presets.sortedNames(Camera.presets),
             "realFps": CACurrentMediaTime() - lock.withLock({ lastFrameAt }) > 1.5 ? 0 : n((st.fps * 10).rounded() / 10),
             "asleep": asleep,
             "interrupted": interrupted ?? "",
             "bitDepth": bitDepth,
-            "cap": cap,
+            "cap": cap, "proc": proc, "faceExp": lock.withLock { faceExpOn } ? "1" : "0", "faceStops": (logStops * 10).rounded() / 10, "logOn": lock.withLock { logOn },
             "thermal": ["ok", "warm", "hot", "critical"][min(3, ProcessInfo.processInfo.thermalState.rawValue)],
             "encMs": n((st.encMs * 10).rounded() / 10), "anaMs": n((st.anaMs * 100).rounded() / 100), "pipeMs": n((st.pipeMs * 10).rounded() / 10),
             "rot": lock.withLock { autoRot } ? "auto" : "\(rot)",
             "rotNow": rot,
             "gravity": n((lock.withLock { gravityDeg } * 10).rounded() / 10),
-            "q": q, "sat": sat, "con": con, "black": blk, "hsl": lock.withLock { hsl.string },
+            "q": q, "vib": lock.withLock { vibrance }, "sat": sat, "con": con, "black": blk, "hsl": lock.withLock { hsl.string },
             "accents": lock.withLock { accentsOn ? (portraitOn ? "2" : "1") : "0" }, "accentAmt": lock.withLock { accentAmt },
             "accentHue": lock.withLock { autoHue.map { ($0 * 100).rounded() / 100 } },
             "teeth": teeth, "mouthOpen": mouthOpen,
@@ -361,7 +406,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "wb": skinWB ? "skin" : (d.whiteBalanceMode == .locked && !steadyWBHeld ? "lock" : "auto"),
             "steady": steadyOn ? "1" : "0", "steadyExp": lock.withLock { steadyExpHeld }, "steadyWB": steadyWBHeld,
             "light": lock.withLock { lightOn } ? "1" : "0", "lightAmt": lock.withLock { lightAmt },
-            "tone": lock.withLock { toneOn } ? "1" : "0", "toneNow": lock.withLock { [autoTone.contrast, autoTone.mids].map { ($0 * 100).rounded() / 100 } },
+            "tone": lock.withLock { toneOn } ? "1" : "0", "toneNow": lock.withLock { [autoTone.contrast, autoTone.mids, autoTone.black, autoTone.white].map { ($0 * 100).rounded() / 100 } },
             "temp": n(Double(tt.temperature)),
             "frame": lock.withLock { framing } ? "1" : "0",
             "level": lock.withLock { level } ? "1" : "0",
@@ -397,7 +442,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         guard wantJ || wantH || wantP else { return }
         let (rot, q, sat, con, blk) = lock.withLock { (rotation, quality, saturation, contrast, black) }
         let (wm, tn) = lock.withLock { (warm, tint) }
-        var img = CIImage(cvPixelBuffer: pb)
+        var img = source(pb)
         var shown = CGRect(x: 0, y: 0, width: 1, height: 1) // the part of the sensor the picture shows
         let (on, zoom) = lock.withLock { (framing, softZoom) }
         let W = img.extent.width, H = img.extent.height
@@ -438,14 +483,10 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let (lv, tl) = lock.withLock { (level, tilt) }
         let turn = Level.correction(tilt: tl)
         if lv, turn != 0 { img = Camera.leveled(img, angle: turn) }
-        let (cube, look) = lock.withLock { (hueCube, lutCube) }
+        let cube = lock.withLock { hueCube }
         let e0 = img.extent
         // Grade in gamma-encoded sRGB, like a photo editor, not in CoreImage's linear space.
         img = img.applyingFilter("CILinearToSRGBToneCurve")
-        // The look first (it expects Rec.709 video, like a camera's picture), then the sliders on top of it.
-        if let look {
-            img = img.applyingFilter("CIColorCube", parameters: ["inputCubeDimension": look.size, "inputCubeData": look.data])
-        }
         if sat != 1 || con != 1 {
             img = img.applyingFilter("CIColorControls", parameters: [
                 kCIInputSaturationKey: sat, kCIInputContrastKey: con, kCIInputBrightnessKey: 0])
@@ -480,11 +521,14 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         let e = img.extent
         if e.width != CGFloat(HEVCEncoder.width) || e.height != CGFloat(HEVCEncoder.height) { img = Camera.fit(img) }
         else if e.minX != 0 || e.minY != 0 { img = img.transformed(by: CGAffineTransform(translationX: -e.minX, y: -e.minY)) }
+        if lock.withLock({ chartUntil }) > CACurrentMediaTime() { img = Camera.chart }
         let t0 = CACurrentMediaTime()
         // The picture is rendered once: by the HEVC encoder when the camera is in use; the JPEGs are then
         // made from that finished frame instead of running the whole chain (crop, colour, level) again.
         if wantH, let done = encoder.encode(img, pts: CMSampleBufferGetPresentationTimeStamp(sb)) {
-            img = CIImage(cvPixelBuffer: done)
+            // The buffer holds sRGB values under a Rec.709 tag (as video wants it). Read by its tag, the JPEGs came
+            // out lighter than the camera's picture (mid grey 128 → 139, measured with the test chart).
+            img = CIImage(cvPixelBuffer: done, options: [.colorSpace: srgb])
         }
         if wantJ, let data = jpeg(img, quality: q) { onFrame?(data, false) }
         // Preview: a plain 1/3 scale (bilinear), so the whole picture is only evaluated at 640×360; Lanczos

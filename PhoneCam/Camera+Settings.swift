@@ -8,7 +8,7 @@ import PhoneCamCore
 extension Camera {
     // MARK: settings API (call on `queue`)
 
-    static let persisted = ["lens", "fps", "cap", "rot", "q", "sat", "con", "black", "hsl", "accents", "accentAmt", "steady", "light", "lightAmt", "tone", "skinWarm", "warm", "tint", "zoom", "wb", "exp", "mains", "lut", "lutAmt", "frame", "level", "teeth"]
+    static let persisted = ["lens", "fps", "cap", "proc", "rot", "q", "sat", "vib", "con", "black", "hsl", "accents", "accentAmt", "steady", "faceExp", "light", "lightAmt", "tone", "skinWarm", "warm", "tint", "zoom", "wb", "exp", "mains", "frame", "level", "teeth"]
 
     static func saved() -> [String: String] {
         var p = (UserDefaults.standard.dictionary(forKey: "settings") as? [String: String]) ?? [:]
@@ -21,11 +21,13 @@ extension Camera {
         if p["exp"] == nil || p["exp"] == "manual" { p["exp"] = "auto" }
         // Default grade: neutral, the picture as the camera sees it.
         if p["sat"] == nil { p["sat"] = "1" }
+        if p["vib"] == nil { p["vib"] = "0.35" }
         if p["con"] == nil { p["con"] = "1" }
         if p["black"] == nil { p["black"] = "0" }
         if p["lens"] == nil { p["lens"] = "wide" }
         if p["fps"] == nil { p["fps"] = "30" }
         if p["cap"] == nil { p["cap"] = "4k" }
+        if p["proc"] == nil { p["proc"] = "log" }
         if p["zoom"] == nil { p["zoom"] = "1.15" }
         if p["skinWarm"] == nil { p["skinWarm"] = "0" }
         if p["warm"] == nil { p["warm"] = "0" }
@@ -36,9 +38,8 @@ extension Camera {
         if p["light"] == nil { p["light"] = "1" }
         if p["lightAmt"] == nil { p["lightAmt"] = "0.5" }
         if p["tone"] == nil { p["tone"] = "1" }
+        if p["faceExp"] == nil { p["faceExp"] = "1" }
         if p["accentAmt"] == nil { p["accentAmt"] = "0.6" }
-        if p["lut"] == nil { p["lut"] = "" }
-        if p["lutAmt"] == nil { p["lutAmt"] = "0.7" }
         return Camera.migrated(p)
     }
 
@@ -55,12 +56,12 @@ extension Camera {
 
     func apply(_ p: [String: String]) {
         if p["reset"] == "1" { return resetToDefaults() }
+        if p["chart"] == "1" { lock.withLock { chartUntil = CACurrentMediaTime() + 12 }; return }
         if p["sleep"] == "1" { queue.async { self.sleepSoon = true }; return }
         if let raw = p["presetSave"] {
             if let all = Presets.saving(raw, settings: Camera.saved(), into: Camera.presets) { Camera.presets = all }
             return
         }
-        if let name = p["lutDelete"] { deleteLUT(name); return }
         if let name = p["presetDelete"] { Camera.presets[name] = nil; return }
         if let name = p["presetLoad"] {
             if let preset = Camera.presets[name] { apply(Camera.migrated(preset)) }
@@ -79,6 +80,11 @@ extension Camera {
             switchLens(lens) // new capture size; the camera restarts in auto exposure
             if p["exp"] == nil { lockExposureLater(Camera.saved()["exp"]) }
         }
+        if let v = p["proc"], v == "log" || v == "hdr", v != proc {
+            proc = v
+            switchLens(lens) // the other colour mode of the format; the camera restarts in auto exposure
+            if p["exp"] == nil { lockExposureLater(Camera.saved()["exp"]) }
+        }
         if let v = p["fps"], let f = Int(v), f == 30 || f == 60, f != fps {
             fps = f
             darkLimited = false; darkSince = nil; brightSince = nil
@@ -95,13 +101,9 @@ extension Camera {
             encoder.setBitrate(FrameMath.bitrate(quality: qq))
         }
         if let v = p["sat"], let x = Double(v) { lock.withLock { saturation = min(2, max(0, x)) } }
+        if let v = p["vib"], let x = Double(v) { lock.withLock { vibrance = min(1, max(0, x)) } }
         if let v = p["con"], let x = Double(v) { lock.withLock { contrast = min(1.5, max(0.5, x)) } }
         if let v = p["black"], let x = Double(v) { lock.withLock { black = min(0.1, max(-0.1, x)) } }
-        if p["lut"] != nil || p["lutAmt"] != nil {
-            if let v = p["lut"] { lut = v.isEmpty || Looks.names.contains(v) || Camera.userLUTs().contains(v) ? v : "" }
-            if let v = p["lutAmt"], let x = Double(v) { lutAmt = min(1, max(0, x)) }
-            rebuildLUT()
-        }
         if let v = p["warm"], let x = Double(v) { lock.withLock { warm = min(1, max(-1, x)) } }
         if let v = p["tint"], let x = Double(v) { lock.withLock { tint = min(1, max(-1, x)) } }
         if let v = p["skinWarm"], let x = Double(v) { skinWarm = min(1, max(-1, x)) }
@@ -114,6 +116,7 @@ extension Camera {
             }
         }
         if let v = p["teeth"], let x = Double(v) { lock.withLock { teethAmount = min(1, max(0, x)) } }
+        if let v = p["faceExp"] { lock.withLock { faceExpOn = v == "1" } }
         if let v = p["tone"] {
             lock.withLock { toneOn = v == "1"; if !toneOn { autoTone = AutoOperator.Tone(); toneReset = true } }
             rebuildCube()
@@ -134,7 +137,7 @@ extension Camera {
             }
             rebuildCube()
         }
-        if p["hsl"] != nil || p["sat"] != nil {
+        if p["hsl"] != nil || p["sat"] != nil || p["vib"] != nil {
             if let v = p["hsl"] { lock.withLock { hsl = HSL(string: v) } }
             rebuildCube()
         }

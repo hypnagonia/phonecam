@@ -26,7 +26,7 @@ extension Camera {
             default: orient = .up
             }
             // a third of 4K is plenty for landmarks; Vision wants the face upright
-            let small = CIImage(cvPixelBuffer: pb).transformed(by: CGAffineTransform(scaleX: 1.0 / 3, y: 1.0 / 3))
+            let small = self.source(pb).transformed(by: CGAffineTransform(scaleX: 1.0 / 3, y: 1.0 / 3))
             try? VNImageRequestHandler(ciImage: small, orientation: orient).perform([self.landmarks])
             let area = { (f: VNFaceObservation) in f.boundingBox.width * f.boundingBox.height }
             guard let face = self.landmarks.results?.max(by: { area($0) < area($1) }),

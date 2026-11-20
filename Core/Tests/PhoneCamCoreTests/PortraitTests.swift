@@ -180,10 +180,42 @@ final class BlackPointTests: XCTestCase {
         var h = [Double](repeating: 0, count: 64)
         for i in 8..<56 { h[i] = 10 }
         let t = AutoOperator.tone(histogram: h, strength: 1)
-        XCTAssertGreaterThan(t.black, 0.03)
-        XCTAssertLessThanOrEqual(t.black, 0.06)
-        XCTAssertEqual(t.map(t.black), 0, accuracy: 1e-9)
+        XCTAssertEqual(t.black, (0.133 - 0.04) * 0.7, accuracy: 0.01)   // most of the way to a deep black
+        XCTAssertEqual(t.map(0), 0, accuracy: 1e-9)
         XCTAssertEqual(t.map(1), 1, accuracy: 1e-9)
+        // and its brightest (~0.87) comes up toward white
+        XCTAssertEqual(t.white, (0.96 - 0.867) * 0.6, accuracy: 0.01)
+        XCTAssertGreaterThan(t.map(0.867), 0.9)
+        XCTAssertGreaterThan(t.map(0.5), 0.4); XCTAssertLessThan(t.map(0.5), 0.6) // the middle stays the middle
+    }
+
+    func testTheEndsAreRoundedNotCut() {
+        var t = AutoOperator.Tone(); t.black = 0.1; t.white = 0.06
+        // at the black point the curve is still above black and climbing; no step in its slope anywhere
+        XCTAssertGreaterThan(t.map(0.1), 0.005)
+        var last = -1.0, lastStep = 0.0
+        for i in 0...200 {
+            let y = t.map(Double(i) / 200)
+            XCTAssertGreaterThanOrEqual(y, last)
+            if i > 1 { XCTAssertLessThan(abs((y - last) - lastStep), 0.004) }
+            if i > 0 { lastStep = y - last }
+            last = y
+        }
+    }
+
+    func testThePointsHaveLimits() {
+        // a dim, flat picture (everything between 0.3 and 0.6) is not stretched to full black and white
+        var h = [Double](repeating: 0, count: 64)
+        for i in 20..<38 { h[i] = 10 }
+        let t = AutoOperator.tone(histogram: h, strength: 1)
+        XCTAssertEqual(t.black, 0.14, accuracy: 1e-9)
+        XCTAssertEqual(t.white, 0.08, accuracy: 1e-9)
+    }
+
+    func testAPictureWithWhiteKeepsItsWhitePoint() {
+        var h = [Double](repeating: 0, count: 64)
+        for i in 0..<64 { h[i] = 10 }
+        XCTAssertEqual(AutoOperator.tone(histogram: h, strength: 1).white, 0, accuracy: 1e-9)
     }
 
     func testRealBlacksStay() {

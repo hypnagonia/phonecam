@@ -3,8 +3,8 @@ import Foundation
 /// Named sets of picture settings, stored as `[name: [key: value]]`.
 public enum Presets {
     /// What a preset holds: the look and framing, not the load (size, frame rate, quality).
-    public static let keys: Set<String> = ["lens", "zoom", "frame", "level", "wb", "exp", "mains", "sat", "con", "black",
-                                           "hsl", "accents", "accentAmt", "light", "lightAmt", "tone", "warm", "tint", "skinWarm", "rot", "lut", "lutAmt"]
+    public static let keys: Set<String> = ["lens", "zoom", "frame", "level", "wb", "exp", "mains", "sat", "vib", "con", "black",
+                                           "hsl", "accents", "accentAmt", "light", "lightAmt", "tone", "faceExp", "warm", "tint", "skinWarm", "rot"]
     public static let maxCount = 12
     public static let maxNameLength = 24
 

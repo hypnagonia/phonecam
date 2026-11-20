@@ -66,7 +66,7 @@ extension Camera {
             if hlOffset != 0 { hlOffset = 0; applyBias() }
             return
         }
-        let img = CIImage(cvPixelBuffer: pb)
+        let img = source(pb)
         let sx = 96 / img.extent.width, sy = 54 / img.extent.height
         let small = img.transformed(by: CGAffineTransform(scaleX: sx, y: sy))
         var px = [UInt8](repeating: 0, count: 96 * 54 * 4)

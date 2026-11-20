@@ -112,7 +112,7 @@ extension Camera {
         }
         if reset { toneTracker.reset() }
         guard on else { return }
-        let img = CIImage(cvPixelBuffer: pb)
+        let img = source(pb)
         let w = 64, h = 36
         let small = img.transformed(by: CGAffineTransform(scaleX: CGFloat(w) / img.extent.width, y: CGFloat(h) / img.extent.height))
         var px = [UInt8](repeating: 0, count: w * h * 4)
@@ -133,7 +133,7 @@ extension Camera {
         let t = toneTracker.update(AutoOperator.tone(histogram: hist, strength: 1))
         let changed = lock.withLock { () -> Bool in
             let big = abs(t.contrast - autoTone.contrast) > 0.005 || abs(t.mids - autoTone.mids) > 0.005
-                || abs(t.black - autoTone.black) > 0.003
+                || abs(t.black - autoTone.black) > 0.003 || abs(t.white - autoTone.white) > 0.003
             if big { autoTone = t }
             return big
         }

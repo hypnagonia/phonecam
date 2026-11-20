@@ -11,7 +11,12 @@ router.
 - Focus stays on your face (or click to focus); auto exposure that doesn't blow out the background
 - Natural skin under coloured lights; horizon levelling; auto framing that follows you calmly, like a camera
   operator (ignores small moves and leaning in, then pans slowly)
-- Colour controls: warmth, tint, saturation, contrast, HSL, looks and `.cube` LUTs; presets
+- Colour controls: warmth, tint, saturation, contrast, HSL; presets
+- Records Apple Log where the iPhone has it (15 Pro and later), so almost none of the iPhone's own picture processing,
+  and develops it to Rec.709 itself: colours outside Rec.709 eased in, the contrast a screen needs, highlights that
+  fade into white; the exposure follows your face. **Vibrance** makes weak colours richer and leaves skin alone
+- The iPhone's own HDR picture, as before Apple Log, is still there on the page's **Legacy** tab
+- `/set?chart=1` shows a test chart for 12 s, to check that colours arrive unchanged at the Mac camera
 - **HSL auto 2:** you stand out from the room. Clothes get richer and cleaner colours, skin a warm tan (neither red
   nor green), one small colourful thing behind you becomes the accent if there is one, big coloured walls get
   calmer, milky blacks get deeper. Decided slowly from the last half minute
@@ -57,7 +62,7 @@ iPhone app captures, processes and encodes HEVC → UDP → Mac menu bar app (`l
 | `PhoneCam/` | iPhone app: capture, picture pipeline, encoder, UDP streamer, HTTP server, control page; `Camera+Teeth.swift` finds the mouth with Vision face landmarks |
 | `mac/PhoneCamMac/` | Menu bar app: finds the phone, receives video, relays requests with the key |
 | `mac/CameraExtension/` | CoreMediaIO camera extension |
-| `Core/` | Shared pure logic with unit tests (`swift test --package-path Core`): stream format, UDP packets, orientation and levelling, bitrate, colour (HSL, auto accents, HSL auto 2, skin tan, auto tone), LUTs, presets |
+| `Core/` | Shared pure logic with unit tests (`swift test --package-path Core`): stream format, UDP packets, orientation and levelling, bitrate, colour (HSL, auto accents, HSL auto 2, skin tan, auto tone), presets |
 | `scripts/hooks/pre-push` | Blocks pushes with private data (`git config core.hooksPath scripts/hooks`) |
 
 Endpoints: `/` control page · `/state`, `/set?key=value` API · `/hevc` camera stream · `/video` MJPEG (OBS

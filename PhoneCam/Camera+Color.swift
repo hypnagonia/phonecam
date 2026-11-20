@@ -17,12 +17,17 @@ extension Camera {
         let inner = rect.insetBy(dx: rect.width * 0.3, dy: rect.height * 0.3)
         let r = CGRect(x: inner.minX * w, y: (1 - inner.maxY) * h, width: inner.width * w, height: inner.height * h)
         guard r.width > 4, r.height > 4 else { return }
-        let img = CIImage(cvPixelBuffer: pb)
+        let img = source(pb)
         let avg = img.applyingFilter("CIAreaAverage", parameters: [kCIInputExtentKey: CIVector(cgRect: r)])
         var px = [Float](repeating: 0, count: 4)
         ci.render(avg, toBitmap: &px, rowBytes: 16, bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
                   format: .RGBAf, colorSpace: CGColorSpace(name: CGColorSpace.linearSRGB))
         let (R, G, B) = (Double(px[0]), Double(px[1]), Double(px[2]))
+        // Apple Log: the developing exposure follows the face, so a window behind you or a lamp switched on does
+        // not leave it dark or burnt. Held while no face is seen; back to none when switched off.
+        if lock.withLock({ logOn && faceExpOn }) {
+            logStops = min(AppleLog.maxLift, max(AppleLog.maxCut, logStops + AppleLog.exposureStep(faceLuma: 0.2126 * R + 0.7152 * G + 0.0722 * B)))
+        } else if logStops != 0 { logStops = 0 }
         faceLuma = (pow(max(0, 0.2126 * R + 0.7152 * G + 0.0722 * B), 1 / 2.2), CACurrentMediaTime())
         guard G > 0.003 else { return } // too dark to judge
         // Bright light can push the red channel of skin to its limit; then the face reads "not red
@@ -81,18 +86,17 @@ extension Camera {
     func rebuildCube() {
         // HSL is either manual (the sliders) or auto (from the scene), never both. HSL auto 2 also turns hues
         // (clothes toward clean colours) and gives skin a tan instead of the bands, at the same strength.
+        let vib = lock.withLock { vibrance }
         let (h, sat, tone, tan) = lock.withLock { () -> (HSL, Double, AutoOperator.Tone, Double) in
             var auto = HSL().addingSaturation(autoSat)
             if portraitOn { auto.hue = autoHue }
-            // Auto tone's contrast and mid-tones as always; its black point only in HSL auto 2
             var tone = toneOn ? autoTone : AutoOperator.Tone()
-            if !(accentsOn && portraitOn) { tone.black = 0 }
             return (accentsOn ? auto : hsl, saturation, tone, accentsOn && portraitOn ? accentAmt : 0)
         }
         let shift = skinWB ? skinShift : 0
         builtShift = shift
         let cube = ColorCube.make(hsl: h, saturation: sat, skinCenter: faceHueDeg ?? Camera.skinHueDeg, skinShift: shift,
-                                  tone: tone, skinTan: tan)
+                                  tone: tone, skinTan: tan, vibrance: vib)
         lock.withLock { hueCube = cube }
     }
 
@@ -107,7 +111,7 @@ extension Camera {
         }
         if reset { accentTracker.reset(); portraitHue.reset(); portraitSat.reset() }
         guard on else { return }
-        let img = CIImage(cvPixelBuffer: pb)
+        let img = source(pb)
         let w = 96, h = 54
         let small = img.transformed(by: CGAffineTransform(scaleX: CGFloat(w) / img.extent.width, y: CGFloat(h) / img.extent.height))
         var px = [UInt8](repeating: 0, count: w * h * 4)

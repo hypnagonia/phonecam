@@ -78,7 +78,7 @@ final class RelayHTTPTests: XCTestCase {
 
     func testBodyKeptByteForByte() {
         let body = Data([0, 1, 2, 0xff, 13, 10])
-        let req = Data("POST /lut HTTP/1.1\r\nContent-Length: 6\r\n\r\n".utf8) + body
+        let req = Data("POST /set HTTP/1.1\r\nContent-Length: 6\r\n\r\n".utf8) + body
         let out = RelayHTTP.addHeader(req, name: "X-PhoneCam-Key", value: "k")
         XCTAssertEqual(out.suffix(6), body)
         XCTAssertEqual(out.count, req.count + "X-PhoneCam-Key: k\r\n".utf8.count)

@@ -112,7 +112,7 @@ public enum ColorCube {
     /// One colour through the cube's adjustments. `skinTan` 0…1 (HSL auto 2): skin tones (±30° around
     /// `skinCenter`) are kept out of the HSL bands and given a tan instead (see `tan`).
     public static func apply(_ c0: SIMD3<Double>, hsl: HSL, saturation: Double, skinCenter: Double, skinShift: Double,
-                             tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0) -> SIMD3<Double> {
+                             tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0, vibrance: Double = 0) -> SIMD3<Double> {
         var c = c0
         if let h = hue(c) {
             let mx = max(c.x, c.y, c.z), chroma = mx - min(c.x, c.y, c.z)
@@ -125,6 +125,12 @@ public enum ColorCube {
             // natural saturation whatever the global saturation slider does.
             var f = 1 + a.ds * colourful
             f *= 1 + (1 / max(0.3, saturation) - 1) * band30(h, 25)
+            // Vibrance: weak colours get richer (up to +60 % at 1), full ones hardly change, so nothing is pushed
+            // into clipping; skin keeps a fifth of it, or faces turn orange.
+            if vibrance > 0 {
+                let full = chroma / max(mx, 1e-6)
+                f *= 1 + 0.6 * vibrance * (1 - full) * (1 - full) * colourful * (1 - 0.8 * band30(h, skinCenter))
+            }
             if abs(f - 1) > 0.0001 {
                 let y = 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z
                 c = SIMD3(repeating: y) + (c - SIMD3(repeating: y)) * f
@@ -164,12 +170,13 @@ public enum ColorCube {
 
     /// CIColorCube data (RGBA Float32); nil when the cube would change nothing.
     public static func make(hsl: HSL, saturation: Double, skinCenter: Double, skinShift: Double,
-                            tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0) -> Data? {
-        guard !(hsl.isNeutral && abs(saturation - 1) < 0.01 && abs(skinShift) < 0.25 && tone.isNeutral && skinTan <= 0)
+                            tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0, vibrance: Double = 0) -> Data? {
+        guard !(hsl.isNeutral && abs(saturation - 1) < 0.01 && abs(skinShift) < 0.25 && tone.isNeutral && skinTan <= 0
+                && vibrance <= 0.005)
         else { return nil }
         return CubeLUT.make(size: size) {
             apply($0, hsl: hsl, saturation: saturation, skinCenter: skinCenter, skinShift: skinShift, tone: tone,
-                  skinTan: skinTan)
+                  skinTan: skinTan, vibrance: vibrance)
         }.cubeData(amount: 1)
     }
 }
