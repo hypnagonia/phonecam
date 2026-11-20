@@ -76,12 +76,34 @@ final class Server {
             if let data { buf.append(data) }
             if let r = buf.range(of: Data("\r\n\r\n".utf8)) {
                 let head = String(decoding: buf[..<r.lowerBound], as: UTF8.self)
-                self.route(c, head)
+                if head.hasPrefix("POST ") {
+                    self.readBody(c, head: head, Data(buf[r.upperBound...]))
+                } else {
+                    self.route(c, head)
+                }
             } else if done || err != nil || buf.count > 65536 {
                 c.cancel()
             } else {
                 self.readRequest(c, buf)
             }
+        }
+    }
+
+    /// The body of a POST (a .cube upload), up to its Content-Length.
+    private func readBody(_ c: NWConnection, head: String, _ have: Data) {
+        let lenLine = head.split(separator: "\r\n").first { $0.lowercased().hasPrefix("content-length:") }
+        let len = lenLine.flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? -1
+        guard len >= 0, len <= Camera.maxLUTBytes else {
+            return reply(c, "413 Payload Too Large", "text/plain", Data("The file is too big (8 MB at most).".utf8))
+        }
+        if have.count >= len { return route(c, head, body: Data(have.prefix(len))) }
+        c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, err in
+            guard let self else { return }
+            var buf = have
+            if let data { buf.append(data) }
+            if buf.count >= len { self.route(c, head, body: Data(buf.prefix(len))) }
+            else if done || err != nil { c.cancel() }
+            else { self.readBody(c, head: head, buf) }
         }
     }
 
@@ -93,11 +115,16 @@ final class Server {
         return k.hasPrefix("$(") ? "" : k
     }()
 
-    private func route(_ c: NWConnection, _ head: String) {
+    private func route(_ c: NWConnection, _ head: String, body: Data? = nil) {
         let lines = head.split(separator: "\r\n")
         let first = lines.first ?? ""
         let parts = first.split(separator: " ")
-        guard parts.count >= 2, let url = URLComponents(string: "http://x" + parts[1]) else {
+        // Browsers send a space in a query as "+" (the page's URLSearchParams does); URLComponents only knows "%20",
+        // so a name with spaces (a LUT, a preset) arrived with plus signs and matched nothing.
+        let target = String(parts.count >= 2 ? parts[1] : "")
+        let cut = target.firstIndex(of: "?") ?? target.endIndex
+        let spaced = target[..<cut] + target[cut...].replacingOccurrences(of: "+", with: "%20")
+        guard parts.count >= 2, let url = URLComponents(string: "http://x" + spaced) else {
             return reply(c, "400 Bad Request", "text/plain", Data("bad request".utf8))
         }
         var params: [String: String] = [:]
@@ -119,6 +146,12 @@ final class Server {
             startStream(c, preview: params["preview"] == "1")
         case "/hevc":
             startHEVC(c)
+        case "/lut":
+            // Upload of a .cube LUT: POST /lut?name=<file name>, the file as the body.
+            guard let body else { return reply(c, "405 Method Not Allowed", "text/plain", Data("POST a .cube file".utf8)) }
+            let err: String? = cam.queue.sync { cam.saveLUT(name: params["name"] ?? "", data: body) }
+            if let err { reply(c, "400 Bad Request", "text/plain; charset=utf-8", Data(err.utf8)) }
+            else { reply(c, "200 OK", "application/json", Data("{\"ok\":true}".utf8)) }
         case "/state", "/set":
             let st: [String: Any] = cam.queue.sync {
                 if url.path == "/set" { cam.apply(params) }

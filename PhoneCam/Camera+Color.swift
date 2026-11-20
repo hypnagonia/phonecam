@@ -87,15 +87,17 @@ extension Camera {
         // HSL is either manual (the sliders) or auto (from the scene), never both. HSL auto 2 also turns hues
         // (clothes toward clean colours) and gives skin a tan instead of the bands, at the same strength.
         let vib = lock.withLock { vibrance }
-        let (h, sat, tone, tan) = lock.withLock { () -> (HSL, Double, AutoOperator.Tone, Double) in
+        let (h, tone, tan) = lock.withLock { () -> (HSL, AutoOperator.Tone, Double) in
             var auto = HSL().addingSaturation(autoSat)
             if portraitOn { auto.hue = autoHue }
             var tone = toneOn ? autoTone : AutoOperator.Tone()
-            return (accentsOn ? auto : hsl, saturation, tone, accentsOn && portraitOn ? accentAmt : 0)
+            // the points belong to the Apple Log picture (the iPhone sets its own in its HDR picture), and have a switch
+            if !(pointsOn && logOn) { tone.black = 0; tone.white = 0 }
+            return (accentsOn ? auto : hsl, tone, accentsOn && portraitOn ? accentAmt : 0)
         }
         let shift = skinWB ? skinShift : 0
         builtShift = shift
-        let cube = ColorCube.make(hsl: h, saturation: sat, skinCenter: faceHueDeg ?? Camera.skinHueDeg, skinShift: shift,
+        let cube = ColorCube.make(hsl: h, skinCenter: faceHueDeg ?? Camera.skinHueDeg, skinShift: shift,
                                   tone: tone, skinTan: tan, vibrance: vib)
         lock.withLock { hueCube = cube }
     }

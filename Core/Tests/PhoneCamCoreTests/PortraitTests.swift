@@ -155,22 +155,22 @@ final class SkinTanTests: XCTestCase {
         var hsl = HSL()
         hsl.sat[0] = 1; hsl.sat[1] = 1
         let skin = ColorCube.withHue(SIMD3(0.82, 0.6, 0.5), 22)
-        let withTan = ColorCube.apply(skin, hsl: hsl, saturation: 1, skinCenter: 22, skinShift: 0, skinTan: 1)
+        let withTan = ColorCube.apply(skin, hsl: hsl, skinCenter: 22, skinShift: 0, skinTan: 1)
         let plainTan = ColorCube.tan(skin, amount: 1)
         XCTAssertEqual(withTan.x, plainTan.x, accuracy: 0.02)
         XCTAssertEqual(withTan.y, plainTan.y, accuracy: 0.02)
         XCTAssertEqual(withTan.z, plainTan.z, accuracy: 0.02)
         // and greys stay grey
         let grey = SIMD3(0.5, 0.5, 0.5)
-        XCTAssertEqual(ColorCube.apply(grey, hsl: hsl, saturation: 1, skinCenter: 22, skinShift: 0, skinTan: 1), grey)
+        XCTAssertEqual(ColorCube.apply(grey, hsl: hsl, skinCenter: 22, skinShift: 0, skinTan: 1), grey)
     }
 
     func testNoTanIsTheOldCube() {
         var hsl = HSL()
         hsl.sat[5] = 0.4
         let c = SIMD3(0.2, 0.4, 0.8)
-        XCTAssertEqual(ColorCube.apply(c, hsl: hsl, saturation: 1, skinCenter: 22, skinShift: 0),
-                       ColorCube.apply(c, hsl: hsl, saturation: 1, skinCenter: 22, skinShift: 0, skinTan: 0))
+        XCTAssertEqual(ColorCube.apply(c, hsl: hsl, skinCenter: 22, skinShift: 0),
+                       ColorCube.apply(c, hsl: hsl, skinCenter: 22, skinShift: 0, skinTan: 0))
     }
 }
 

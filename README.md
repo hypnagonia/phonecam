@@ -14,7 +14,9 @@ router.
 - Colour controls: warmth, tint, saturation, contrast, HSL; presets
 - Records Apple Log where the iPhone has it (15 Pro and later), so almost none of the iPhone's own picture processing,
   and develops it to Rec.709 itself: colours outside Rec.709 eased in, the contrast a screen needs, highlights that
-  fade into white; the exposure follows your face. **Vibrance** makes weak colours richer and leaves skin alone
+  fade into white; the exposure follows your face. **Vibrance** makes weak colours richer
+- Your own developing: a `.cube` LUT made for Apple Log footage (Apple Log in, Rec.709 out) instead of the built-in
+  one; a wide manual black point for haze from a window
 - The iPhone's own HDR picture, as before Apple Log, is still there on the page's **Legacy** tab
 - `/set?chart=1` shows a test chart for 12 s, to check that colours arrive unchanged at the Mac camera
 - **HSL auto 2:** you stand out from the room. Clothes get richer and cleaner colours, skin a warm tan (neither red

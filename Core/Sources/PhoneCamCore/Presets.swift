@@ -4,7 +4,7 @@ import Foundation
 public enum Presets {
     /// What a preset holds: the look and framing, not the load (size, frame rate, quality).
     public static let keys: Set<String> = ["lens", "zoom", "frame", "level", "wb", "exp", "mains", "sat", "vib", "con", "black",
-                                           "hsl", "accents", "accentAmt", "light", "lightAmt", "tone", "faceExp", "warm", "tint", "skinWarm", "rot"]
+                                           "hsl", "accents", "accentAmt", "light", "lightAmt", "tone", "faceExp", "points", "warm", "tint", "skinWarm", "rot"]
     public static let maxCount = 12
     public static let maxNameLength = 24
 

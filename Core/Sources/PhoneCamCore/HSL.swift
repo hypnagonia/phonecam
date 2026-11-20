@@ -62,8 +62,8 @@ public struct HSL: Equatable {
     }
 }
 
-/// The 32³ colour cube the picture goes through (gamma-encoded sRGB in and out): HSL per colour, skin kept
-/// at its natural saturation when the global saturation changes, and the Skin white balance's hue shift.
+/// The 32³ colour cube the picture goes through (gamma-encoded sRGB in and out): HSL per colour, vibrance, and
+/// the Skin white balance's hue shift.
 public enum ColorCube {
     public static let size = 32
 
@@ -111,7 +111,7 @@ public enum ColorCube {
 
     /// One colour through the cube's adjustments. `skinTan` 0…1 (HSL auto 2): skin tones (±30° around
     /// `skinCenter`) are kept out of the HSL bands and given a tan instead (see `tan`).
-    public static func apply(_ c0: SIMD3<Double>, hsl: HSL, saturation: Double, skinCenter: Double, skinShift: Double,
+    public static func apply(_ c0: SIMD3<Double>, hsl: HSL, skinCenter: Double, skinShift: Double,
                              tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0, vibrance: Double = 0) -> SIMD3<Double> {
         var c = c0
         if let h = hue(c) {
@@ -121,15 +121,15 @@ public enum ColorCube {
             var a = hsl.adjustment(hue: h)
             if skinW > 0 { a = (a.dh * (1 - skinW), a.ds * (1 - skinW), a.dl * (1 - skinW)) }
             if abs(a.dh) > 0.01 { c = c + (withHue(c, h + a.dh) - c) * colourful }
-            // Saturation: the colour scaled around the grey of the same luma; skin (~25°) also keeps its
-            // natural saturation whatever the global saturation slider does.
+            // Saturation: the colour scaled around the grey of the same luma. (Skin used to be held at its natural
+            // saturation here whatever the Saturation slider did: at high settings the face stayed pale in a vivid
+            // picture, with red patches where its hue left the protected band. Skin now moves with everything.)
             var f = 1 + a.ds * colourful
-            f *= 1 + (1 / max(0.3, saturation) - 1) * band30(h, 25)
             // Vibrance: weak colours get richer (up to +60 % at 1), full ones hardly change, so nothing is pushed
-            // into clipping; skin keeps a fifth of it, or faces turn orange.
+            // into clipping. Skin gets it like everything else.
             if vibrance > 0 {
                 let full = chroma / max(mx, 1e-6)
-                f *= 1 + 0.6 * vibrance * (1 - full) * (1 - full) * colourful * (1 - 0.8 * band30(h, skinCenter))
+                f *= 1 + 0.6 * vibrance * (1 - full) * (1 - full) * colourful
             }
             if abs(f - 1) > 0.0001 {
                 let y = 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z
@@ -169,13 +169,13 @@ public enum ColorCube {
     }
 
     /// CIColorCube data (RGBA Float32); nil when the cube would change nothing.
-    public static func make(hsl: HSL, saturation: Double, skinCenter: Double, skinShift: Double,
+    public static func make(hsl: HSL, skinCenter: Double, skinShift: Double,
                             tone: AutoOperator.Tone = AutoOperator.Tone(), skinTan: Double = 0, vibrance: Double = 0) -> Data? {
-        guard !(hsl.isNeutral && abs(saturation - 1) < 0.01 && abs(skinShift) < 0.25 && tone.isNeutral && skinTan <= 0
+        guard !(hsl.isNeutral && abs(skinShift) < 0.25 && tone.isNeutral && skinTan <= 0
                 && vibrance <= 0.005)
         else { return nil }
         return CubeLUT.make(size: size) {
-            apply($0, hsl: hsl, saturation: saturation, skinCenter: skinCenter, skinShift: skinShift, tone: tone,
+            apply($0, hsl: hsl, skinCenter: skinCenter, skinShift: skinShift, tone: tone,
                   skinTan: skinTan, vibrance: vibrance)
         }.cubeData(amount: 1)
     }

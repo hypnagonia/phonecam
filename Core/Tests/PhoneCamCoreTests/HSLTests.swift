@@ -5,7 +5,7 @@ import simd
 final class HSLTests: XCTestCase {
     let green = SIMD3(0.25, 0.6, 0.2), blue = SIMD3(0.2, 0.35, 0.75), red = SIMD3(0.75, 0.2, 0.18)
     let grey = SIMD3(0.5, 0.5, 0.5)
-    func cube(_ c: SIMD3<Double>, _ h: HSL) -> SIMD3<Double> { ColorCube.apply(c, hsl: h, saturation: 1, skinCenter: 20, skinShift: 0) }
+    func cube(_ c: SIMD3<Double>, _ h: HSL) -> SIMD3<Double> { ColorCube.apply(c, hsl: h, skinCenter: 20, skinShift: 0) }
 
     func testStringRoundTrip() {
         var h = HSL(); h.hue[3] = 0.5; h.sat[5] = -0.25; h.lum[1] = 1
@@ -17,7 +17,7 @@ final class HSLTests: XCTestCase {
 
     func testNeutralChangesNothing() {
         for c in [green, blue, red, grey] { XCTAssertLessThan(simd_distance(cube(c, HSL()), c), 1e-9) }
-        XCTAssertNil(ColorCube.make(hsl: HSL(), saturation: 1, skinCenter: 20, skinShift: 0))
+        XCTAssertNil(ColorCube.make(hsl: HSL(), skinCenter: 20, skinShift: 0))
     }
 
     func testBlueSaturationLeavesRedAlone() {
@@ -60,7 +60,7 @@ final class HSLTests: XCTestCase {
 final class VibranceTests: XCTestCase {
     private func sat(_ c: SIMD3<Double>) -> Double { (max(c.x, c.y, c.z) - min(c.x, c.y, c.z)) / max(c.x, c.y, c.z) }
     private func vib(_ c: SIMD3<Double>, _ v: Double) -> SIMD3<Double> {
-        ColorCube.apply(c, hsl: HSL(), saturation: 1, skinCenter: 20, skinShift: 0, vibrance: v)
+        ColorCube.apply(c, hsl: HSL(), skinCenter: 20, skinShift: 0, vibrance: v)
     }
 
     func testWeakColoursGainMostFullOnesAlmostNothing() {
@@ -70,9 +70,9 @@ final class VibranceTests: XCTestCase {
         XCTAssertEqual(vib(weak, 0), weak)
     }
 
-    func testSkinAndGreyAreSpared() {
+    func testSkinGetsItLikeAnyColourAndGreyNone() {
         let skin = SIMD3(0.78, 0.60, 0.50), blue = SIMD3(0.50, 0.60, 0.78) // equally weak colours
-        XCTAssertLessThan(sat(vib(skin, 1)) / sat(skin), 1 + (sat(vib(blue, 1)) / sat(blue) - 1) * 0.4)
+        XCTAssertEqual(sat(vib(skin, 1)) / sat(skin), sat(vib(blue, 1)) / sat(blue), accuracy: 0.03)
         let grey = SIMD3(repeating: 0.5)
         XCTAssertEqual(vib(grey, 1), grey)
     }

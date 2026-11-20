@@ -54,6 +54,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // Settings, touched only on `queue`.
     var lens = "wide"
     var fps = 30
+    var pointsOn = false             // under `lock`: Auto tone also sets the black and white points (Apple Log only)
     var faceExpOn = true            // under `lock`: the developing exposure follows the face's brightness
     var logStops = 0.0              // videoQueue: what that has added so far, in stops (−1…+0.8)
     var chartUntil = 0.0            // under `lock`: the test chart is shown until then
@@ -62,6 +63,9 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     // "log": Apple Log developed by PhoneCam (where the camera has it); "hdr": the iPhone's own picture with
     // video HDR, as before Apple Log (the Legacy tab). On `queue`.
     var proc = "log"
+    // Developing: "" = PhoneCam's own, or the name of your Apple Log → Rec.709 .cube LUT. On `queue`.
+    var lut = ""
+    var devLUT: (data: Data, size: Int)? // under `lock`: that LUT as a colour cube
     var cap = "4k"                 // capture size: "4k" (sharpest crops) or "1080" (cooler, less battery)
     // Heat: while the iPhone is hot, capture drops to 1080p at 30 fps; the chosen settings come back once it
     // has been cool for a minute. On `queue`.
@@ -87,7 +91,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
     var rotation = 0
     var quality = 0.95
     var saturation = 1.2   // 0…2
-    var vibrance = 0.35    // 0…1, under `lock`: weak colours richer, full ones and skin left alone
+    var vibrance = 0.35    // 0…1, under `lock`: weak colours richer, full ones left alone
     var contrast = 1.0     // 0.5…1.5
     var black = 0.0        // -0.1 (lift) … +0.1 (crush)
     var warm = 0.0, tint = 0.0 // under `lock`: manual colour balance, -1…1 (warm: blue↔amber, tint: green↔magenta)
@@ -326,6 +330,12 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             let o = AppleLog.codeOffset(stops: logStops)
             raw = raw.applyingFilter("CIColorMatrix", parameters: ["inputBiasVector": CIVector(x: o, y: o, z: o, w: 0)])
         }
+        // Your LUT gives a finished Rec.709 picture (gamma-encoded, taken as sRGB like any video on a screen);
+        // the rest of the chain works in linear light, as after the built-in developing.
+        if let mine = lock.withLock({ devLUT }) {
+            return raw.applyingFilter("CIColorCube", parameters: ["inputCubeDimension": mine.size, "inputCubeData": mine.data])
+                .applyingFilter("CISRGBToneCurveToLinear")
+        }
         return raw
             .applyingFilter("CIColorCube", parameters: ["inputCubeDimension": 48, "inputCubeData": logCube])
     }
@@ -366,7 +376,13 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
         case .locked: exp = lock.withLock { steadyExpHeld } ? "auto" : "lock"
         default: exp = "auto"
         }
-        return [
+        // (in a dictionary of its own: one literal with everything is more than the compiler will type-check)
+        let developing: [String: Any] = [
+            "lut": lut, "luts": Camera.userLUTs(), "proc": proc, "logOn": lock.withLock { logOn },
+            "points": lock.withLock { pointsOn } ? "1" : "0",
+            "faceExp": lock.withLock { faceExpOn } ? "1" : "0", "faceStops": (logStops * 10).rounded() / 10,
+        ]
+        let main: [String: Any] = [
             "ok": true,
             "lens": lens,
             "lenses": Camera.lensNames.filter { findDevice($0) != nil },
@@ -378,7 +394,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "asleep": asleep,
             "interrupted": interrupted ?? "",
             "bitDepth": bitDepth,
-            "cap": cap, "proc": proc, "faceExp": lock.withLock { faceExpOn } ? "1" : "0", "faceStops": (logStops * 10).rounded() / 10, "logOn": lock.withLock { logOn },
+            "cap": cap,
             "thermal": ["ok", "warm", "hot", "critical"][min(3, ProcessInfo.processInfo.thermalState.rawValue)],
             "encMs": n((st.encMs * 10).rounded() / 10), "anaMs": n((st.anaMs * 100).rounded() / 100), "pipeMs": n((st.pipeMs * 10).rounded() / 10),
             "rot": lock.withLock { autoRot } ? "auto" : "\(rot)",
@@ -415,6 +431,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCa
             "zoomMin": lock.withLock { framing } ? 1.15 : n(Double(d.minAvailableVideoZoomFactor)),
             "zoomMax": lock.withLock { framing } ? 3.0 : n(Double(maxZoom(d))),
         ]
+        return main.merging(developing) { a, _ in a }
     }
 
 

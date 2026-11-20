@@ -97,6 +97,8 @@ enum Page {
     .presets button.x{color:var(--faint);padding:5px 9px 5px 5px}
     .presets button:hover{color:var(--acc)}
     .presets .none{color:var(--faint);font-size:13px}
+    .presets .p.on{background:var(--acc);border-color:var(--acc)} .presets .p.on button{color:var(--acc-ink);font-weight:600}
+    h3 label.mini input{display:none}
     .prow{display:flex;gap:6px;width:250px;max-width:100%}
     .prow input{flex:1;min-width:0;padding:6px 9px;border-radius:8px;border:1px solid var(--line);background:var(--track);color:var(--fg);font:inherit;font-size:13px}
     .prow button{padding:6px 12px;border-radius:8px;border:0;background:var(--acc);color:var(--acc-ink);font:inherit;font-size:13px;cursor:pointer}
@@ -246,25 +248,32 @@ enum Page {
           <h3>Auto operator <span class="meta"></span><button class="q" title="What these do">?</button></h3>
           <div class="seg" data-k="steady" title="Exposure and white balance stay put while the light is the same, so moving a hand or leaning in doesn't make the picture breathe; they adjust again when the light really changes"><button data-v="1">Steady auto</button><button data-v="0">Off</button></div>
           <div class="seg" data-k="faceExp" title="The picture's brightness follows your face, slowly, so a window behind you or a lamp switched on does not leave it dark or burnt (Apple Log only)"><button data-v="1">Face exposure</button><button data-v="0">Off</button></div>
-          <div class="seg" data-k="tone" title="Black and white points (the darkest thing in the picture becomes black, the brightest white), gentle contrast for a flat picture, brighter mid-tones in a dark room; decided slowly from the last half minute"><button data-v="1">Auto tone</button><button data-v="0">Off</button></div>
+          <div class="seg" data-k="tone" title="Gentle contrast for a flat picture, brighter mid-tones in a dark room; decided slowly from the last half minute"><button data-v="1">Auto tone</button><button data-v="0">Off</button></div>
+          <div class="seg" data-k="points" title="Part of Auto tone, for the Apple Log picture: the darkest thing in the picture is brought toward black and the brightest toward white, softly. Off: the tones stay as developed"><button data-v="1">Black / white points</button><button data-v="0">Off</button></div>
           <div class="seg" data-k="light" title="A little light on your face and a soft darkening toward the corners, following you"><button data-v="1">Face light</button><button data-v="0">Off</button></div>
           <div class="row"><label>Face light</label><input type="range" id="lightAmt" min="0" max="1" step="0.01"><output id="lightAmtOut"></output></div>
           <div class="now" id="opInfo"></div>
-          <div class="hint">Face exposure: the brightness of the picture follows your face, slowly (within −1…+0.8 stops). Steady auto: exposure and white balance stay put while the light is the same, and adjust when it really changes. Auto tone: the black and white points (haze from a window or a lifted exposure goes, the darkest thing becomes black and the brightest white), gentle contrast for a flat picture, brighter mid-tones in a dark room. Face light: a little light on your face and a soft darkening toward the corners.</div>
+          <div class="hint">Face exposure: the brightness of the picture follows your face, slowly (within −1…+0.8 stops). Steady auto: exposure and white balance stay put while the light is the same, and adjust when it really changes. Auto tone: gentle contrast for a flat picture, brighter mid-tones in a dark room. Black / white points (with Auto tone on, Apple Log only): haze from a window or a lifted exposure goes, the darkest thing in the picture moves toward black and the brightest toward white, softly; Off leaves the tones as developed. Face light: a little light on your face and a soft darkening toward the corners.</div>
         </section>
       </div>
 
       <div class="group" id="gColour">
         <h2>Colour</h2>
         <section class="card">
+          <h3>Developing <span class="meta"></span><label class="mini" title="Add a 3D LUT (.cube) made for Apple Log footage: Apple Log in, Rec.709 out">Add .cube<input type="file" id="lutFile" accept=".cube" hidden></label><button class="q" title="What these do">?</button></h3>
+          <div class="presets" id="luts"></div>
+          <div class="now" id="lutMsg"></div>
+          <div class="hint">How the Apple Log frames become a picture. Built-in: PhoneCam's own developing, neutral. Your LUT: a .cube made for Apple Log footage (Apple Log in, Rec.709 out), such as Apple's own or a camera-profile LUT; it replaces the built-in developing. A LUT made for normal video will look far too hard here. The settings below and Face exposure work with both.</div>
+        </section>
+        <section class="card">
           <h3>Balance and tone <span class="meta"></span><button class="mini" id="colorReset" title="These sliders back to the defaults">Reset</button><button class="q" title="What these do">?</button></h3>
           <div class="row" style="margin-top:0"><label>Warmth</label><input type="range" id="warm" min="-1" max="1" step="0.01"><output id="warmOut"></output></div>
           <div class="row"><label>Tint</label><input type="range" id="tint" min="-1" max="1" step="0.01"><output id="tintOut"></output></div>
           <div class="row"><label>Saturation</label><input type="range" id="sat" min="0" max="2" step="0.01"><output id="satOut"></output></div>
-          <div class="row" title="Weak colours get richer; colours that are already full, and skin, hardly change"><label>Vibrance</label><input type="range" id="vib" min="0" max="1" step="0.01"><output id="vibOut"></output></div>
+          <div class="row" title="Weak colours get richer; colours that are already full hardly change"><label>Vibrance</label><input type="range" id="vib" min="0" max="1" step="0.01"><output id="vibOut"></output></div>
           <div class="row"><label>Contrast</label><input type="range" id="con" min="0.5" max="1.5" step="0.01"><output id="conOut"></output></div>
-          <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.1" step="0.002"><output id="blackOut"></output></div>
-          <div class="hint">Vibrance: weak colours get richer, full ones and skin hardly change (Saturation moves everything). Warmth: bluer ↔ more amber. Tint: greener ↔ more magenta. Black: right makes shadows deeper, left lifts them.</div>
+          <div class="row"><label>Black</label><input type="range" id="black" min="-0.1" max="0.2" step="0.002"><output id="blackOut"></output></div>
+          <div class="hint">Vibrance: weak colours get richer, full ones hardly change (Saturation moves everything alike, skin too). Warmth: bluer ↔ more amber. Tint: greener ↔ more magenta. Black: right makes shadows deeper (up to 51 of 255, enough to take the haze of a window behind you off), left lifts them.</div>
         </section>
         <section class="card">
           <h3>HSL <span class="meta"></span><button class="mini" id="hslReset" title="Manual HSL back to no change">Reset</button><button class="q" title="What these do">?</button></h3>
@@ -365,7 +374,7 @@ enum Page {
         if(st.steady==='1') parts.push((st.steadyExp?'exposure held':'exposure adjusting')+', '+(st.steadyWB?'white balance held':'white balance adjusting'));
         if(st.faceExp==='1'&&st.logOn&&Math.abs(st.faceStops)>=0.1) parts.push('face exposure '+(st.faceStops>0?'+':'')+st.faceStops+' stops');
         if(st.tone==='1'&&st.toneNow){ const [c,m,bk,wh]=st.toneNow, t=[];
-          if(bk>=0.01) t.push('black point '+Math.round(bk*255)); if(wh>=0.01) t.push('white point '+Math.round((1-wh)*255));
+          if(st.points==='1'&&st.logOn){ if(bk>=0.01) t.push('black point '+Math.round(bk*255)); if(wh>=0.01) t.push('white point '+Math.round((1-wh)*255)) }
           if(Math.abs(c)>=0.01) t.push('contrast +'+Math.round(c*100)); if(Math.abs(m)>=0.01) t.push('mid-tones '+(m>=0?'+':'')+Math.round(m*100));
           parts.push('tone: '+(t.length?t.join(', '):'fine as it is')) }
         $('opInfo').textContent=parts.length?'Now: '+parts.join(' · '):''; }
@@ -391,6 +400,7 @@ enum Page {
       $('dark').hidden=!st.darkLimited;
       $('mainsAuto').textContent='Lights auto ('+st.mainsHz+' Hz)';
       renderPresets(st.presets||[]);
+      renderLUTs();
       $('fpsOut').textContent=st.realFps; $('cl').textContent=st.clients; $('mbOut').textContent=st.mbps; $('vwOut').textContent=st.viewers;
     }
 
@@ -444,6 +454,36 @@ enum Page {
       [...bands.children].forEach((b,i)=>{ b.classList.toggle('on',i===hslBand); b.classList.toggle('mod',a[i].some(x=>Math.abs(x)>0.005)) });
       setSlider('hslH',v[0],sgn(v[0])); setSlider('hslS',v[1],sgn(v[1])); setSlider('hslL',v[2],sgn(v[2]));
     }
+    // Developing: built-in, then your LUTs (with ×), rebuilt only when the list or the choice changes.
+    let lutKey='';
+    function renderLUTs(){
+      const key=JSON.stringify([st.luts,st.lut]); if(key===lutKey) return; lutKey=key;
+      const box=$('luts'); box.textContent='';
+      const add=(name,label,mine)=>{
+        const w=document.createElement('span'); w.className='p'+((st.lut||'')===name?' on':'');
+        const b=document.createElement('button'); b.textContent=label; b.onclick=()=>send({lut:name});
+        if(!mine) b.style.paddingRight='11px';
+        w.append(b);
+        if(mine){
+          const x=document.createElement('button'); x.className='x'; x.textContent='×'; x.title='Delete '+name;
+          x.onclick=()=>{ if(confirm('Delete LUT '+name+'?')) send({lutDelete:name}) };
+          w.append(x);
+        }
+        box.append(w);
+      };
+      add('','Built-in',false);
+      for(const n of st.luts||[]) add(n,n,true);
+    }
+    $('lutFile').onchange=async e=>{
+      const f=e.target.files[0]; e.target.value=''; if(!f) return;
+      const msg=$('lutMsg');
+      msg.textContent='Loading '+f.name+'…';
+      try{
+        const r=await fetch('/lut?name='+encodeURIComponent(f.name),{method:'POST',body:f});
+        msg.textContent=r.ok?f.name+' added.':await r.text();
+        if(r.ok){ poll(); setTimeout(()=>msg.textContent='',4000) }
+      }catch(err){ msg.textContent='Upload failed: '+err }
+    };
     // Presets: buttons rebuilt only when the list changes.
     let presetList='';
     function renderPresets(list){
